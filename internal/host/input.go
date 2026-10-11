@@ -103,7 +103,7 @@ func pollInput(g *game) {
 	if ebiten.IsKeyPressed(ebiten.KeyAlt) {
 		Shift |= 8
 	}
-	altUsed := false
+	altUsed := modernInput(g)
 	if Shift&8 != 0 && AltKey != nil {
 		for k, c := range altKeys {
 			if inpututil.IsKeyJustPressed(k) {
@@ -119,7 +119,7 @@ func pollInput(g *game) {
 	}
 	for k, b := range specialKeys {
 		down := ebiten.IsKeyPressed(k)
-		if down && !keysDown[k] {
+		if down && !keysDown[k] && !altUsed {
 			a := b.ascii
 			if Shift&3 != 0 {
 				a = b.shifted

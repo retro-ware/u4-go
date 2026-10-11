@@ -24,6 +24,7 @@ func C_01E1() {
 	for bp_02 := 1; bp_02 <= 4; bp_02++ {
 		u4_putc(bp_02 + 'A' - 1)
 		u4_putc(':')
+		getsWords = stoneColors()
 		u4_gets(bp_12[:], 11)
 		Gra_CR()
 		bp_10 := 7
@@ -100,6 +101,7 @@ func C_0311() {
 		return
 	}
 	u4_puts("\nThe Voice says: Use thy Stone.\n\nColor:\n")
+	getsWords = stoneColors()
 	u4_gets(bp_10[:], 11)
 	Gra_CR()
 	bp_02 := 7
@@ -297,6 +299,7 @@ var D_0434 = []struct {
 func CMD_Use() { /*C_07AE*/
 	var bp_0e [12]byte
 	u4_puts("Use which item:\n")
+	getsWords = usableItems()
 	u4_gets(bp_0e[:], 11)
 	Gra_CR()
 	for _, u := range D_0434 {

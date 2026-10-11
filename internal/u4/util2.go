@@ -133,11 +133,16 @@ func u_kbhit() int {
 // u_kbread waits for a key (blinking the cursor) and returns its BIOS word (C_17F4).
 func u_kbread() int {
 	u_delay(0x8081, 0x8081)
+	waiting = true
 	for len(host.KeyQueue) == 0 {
 		host.Yield()
 	}
+	waiting = false
 	k := host.KeyQueue[0]
 	host.KeyQueue = host.KeyQueue[1:]
+	if prompt != pNone {
+		ask(pNone)
+	}
 	return int(k)
 }
 

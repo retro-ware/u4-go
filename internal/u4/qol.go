@@ -1,0 +1,361 @@
+package u4
+
+// The modern layout's knowledge of the game: what the game is waiting for, the menus that
+// answer it, the commands that make sense where the party stands, and the text window's
+// lines for the message history. Menus only type the keys a player would have typed: the
+// game's rules are untouched.
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/memmaker/u4-go/internal/host"
+)
+
+type promptKind int
+
+const (
+	pNone   promptKind = iota
+	pCmd               // a command loop's key (world, dungeon or combat)
+	pDir               // AskDir
+	pLetter            // AskLetter
+	pChara             // AskChara
+	pYN                // AskY_N
+	pWords             // u4_gets with known answers (getsWords)
+)
+
+var (
+	prompt     promptKind
+	promptText string
+	promptLo   int
+	promptHi   int
+	// getsWords are the answers offered for the next u4_gets: set by its caller.
+	getsWords   []string
+	askingChara bool // AskChara is asking through AskLetter
+	// histLine is the text window's line being written, for the history.
+	histLine []byte
+)
+
+// ask tells the host what the game is about to wait for.
+func ask(k promptKind) {
+	prompt = k
+	if k == pCmd {
+		host.InWorld = true
+	}
+	host.NewPrompt()
+}
+
+// waiting is set while u_kbread waits for a key.
+var waiting bool
+
+func init() {
+	host.PromptMenu = promptMenu
+	host.MapClick = mapClick
+	host.Glyphs = func() [][64]byte { return drv.Glyphs[:] }
+}
+
+var talkWords = []string{"Name", "Job", "Health", "Look", "Join", "Give", "Bye"}
+
+// usableItems are the Use command's words for what the party carries.
+func usableItems() []string {
+	var w []string
+	if Party.mStones != 0 {
+		w = append(w, "Stone")
+	}
+	for _, it := range []struct {
+		bit  int
+		name string
+	}{{ST_BELL, "Bell"}, {ST_BOOK, "Book"}, {ST_CANDLE, "Candle"}, {ST_HORN, "Horn"}, {ST_WHEEL, "Wheel"}, {ST_SKULL, "Skull"}} {
+		if TST_MSK(Party.mItems, it.bit) {
+			w = append(w, it.name)
+		}
+	}
+	if Party.mItems&(1<<ST_KEY_T|1<<ST_KEY_L|1<<ST_KEY_C) != 0 {
+		w = append(w, "Key")
+	}
+	return w
+}
+
+// stoneColors are the colours of the stones the party carries.
+func stoneColors() []string {
+	var w []string
+	for i, c := range D_0884 {
+		if TST_MSK8(Party.mStones, i) {
+			w = append(w, c)
+		}
+	}
+	return w
+}
+
+// histPut follows u4_putc into the history line.
+func histPut(c byte) {
+	if txt_Y < 12 || txt_X < 24 { // only the text window, not the status box or the borders
+		return
+	}
+	switch {
+	case c == '\b':
+		if len(histLine) > 0 {
+			histLine = histLine[:len(histLine)-1]
+		}
+	case c >= ' ' && c < 0x7f:
+		histLine = append(histLine, c)
+	}
+}
+
+// histCR ends the history line at a carriage return of the text window.
+func histCR() {
+	host.AddHistory(string(histLine))
+	histLine = histLine[:0]
+}
+
+func dirKey(dx, dy int) uint16 {
+	switch {
+	case dy < 0:
+		return KBD_UP
+	case dy > 0:
+		return KBD_DOWN
+	case dx < 0:
+		return KBD_LEFT
+	}
+	return KBD_RIGHT
+}
+
+var dirNames = []struct {
+	dx, dy int
+	name   string
+}{{0, -1, "North"}, {0, 1, "South"}, {1, 0, "East"}, {-1, 0, "West"}}
+
+func key(c byte) uint16 { return uint16(c) } // the game only tests the ASCII byte of letters
+
+func item(label string, keys ...uint16) host.MenuItem {
+	return host.MenuItem{Label: label, Keys: keys}
+}
+
+func promptMenu(asked bool) *host.Menu {
+	switch prompt {
+	case pCmd:
+		if !asked {
+			return nil
+		}
+		return &host.Menu{Title: "Command", Items: commandItems(), Pause: true}
+	case pDir:
+		m := &host.Menu{Title: "Direction"}
+		for _, d := range dirNames {
+			m.Items = append(m.Items, item(d.name, dirKey(d.dx, d.dy)))
+		}
+		return m
+	case pChara:
+		m := &host.Menu{Title: "Who"}
+		for i := 0; i < int(Party.f_1d8); i++ {
+			m.Items = append(m.Items, item(fmt.Sprintf("%d %s", i+1, cstr(Party.chara[i]._name[:])), key(byte('1'+i))))
+		}
+		return m
+	case pYN:
+		return &host.Menu{Items: []host.MenuItem{item("Yes", key('y')), item("No", key('n'))}}
+	case pLetter:
+		return letterMenu()
+	case pWords:
+		m := &host.Menu{Title: "Say (or type)"}
+		for _, w := range getsWords {
+			keys := make([]uint16, 0, len(w)+1)
+			for i := 0; i < len(w); i++ {
+				keys = append(keys, key(w[i]))
+			}
+			m.Items = append(m.Items, item(w, append(keys, KBD_ENTER)...))
+		}
+		return m
+	}
+	return nil
+}
+
+// letterMenu offers AskLetter's letters, named after the prompt's subject, else after the
+// list the game just printed ("A-Dagger" lines of a shop).
+func letterMenu() *host.Menu {
+	m := &host.Menu{Title: strings.TrimRight(promptText, "\x12\b :?")}
+	name := func(c int) string { return "" }
+	switch {
+	case strings.HasPrefix(promptText, "Spell") || strings.HasPrefix(promptText, "For Spell"):
+		name = func(c int) string {
+			return fmt.Sprintf("%-10s %2d", D_1E98[101+c-'A'], Party._mixtures[c-'A'])
+		}
+	case strings.HasPrefix(promptText, "Weapon"):
+		name = func(c int) string {
+			i := c - 'A'
+			if i == 0 {
+				return D_1E98[37]
+			}
+			if Party._weapons[i] == 0 {
+				return ""
+			}
+			return fmt.Sprintf("%-12s %2d", D_1E98[37+i], Party._weapons[i])
+		}
+	case strings.HasPrefix(promptText, "Armour"):
+		name = func(c int) string {
+			i := c - 'A'
+			if i == 0 {
+				return D_1E98[53]
+			}
+			if Party._armors[i] == 0 {
+				return ""
+			}
+			return fmt.Sprintf("%-12s %2d", D_1E98[53+i], Party._armors[i])
+		}
+	case strings.HasPrefix(promptText, "Reagent"):
+		name = func(c int) string {
+			i := c - 'A'
+			if Party._reagents[i] == 0 {
+				return ""
+			}
+			return fmt.Sprintf("%-12s %2d", D_1E98[93+i], Party._reagents[i])
+		}
+	case promptLo >= 'A':
+		listed := printedChoices()
+		name = func(c int) string { return listed[byte(c)] }
+	}
+	for c := promptLo; c <= promptHi; c++ {
+		label := name(c)
+		if promptLo >= 'A' && label == "" {
+			continue
+		}
+		if label == "" {
+			label = string(rune(c))
+		} else {
+			label = string(rune(c)) + " " + label
+		}
+		m.Items = append(m.Items, item(label, key(byte(c))))
+	}
+	if promptText == "Reagent:\x12\x12\b" {
+		m.Items = append(m.Items, item("(done)", KBD_ENTER))
+	}
+	return m
+}
+
+// printedChoices reads "A-Name" or "A: Name" lines from the recent text.
+func printedChoices() map[byte]string {
+	got := map[byte]string{}
+	h := host.History
+	for i := len(h) - 1; i >= 0 && i >= len(h)-24; i-- {
+		l := strings.TrimSpace(h[i])
+		if len(l) > 2 && l[0] >= 'A' && l[0] <= 'Z' && (l[1] == '-' || l[1] == ':' || l[1] == ')') {
+			if _, ok := got[l[0]]; !ok {
+				got[l[0]] = strings.TrimSpace(l[2:])
+			}
+		}
+	}
+	return got
+}
+
+// commandItems are the commands, those that act on what is around the party first.
+func commandItems() []host.MenuItem {
+	var ctx []host.MenuItem
+	if CurMode == MOD_OUTDOORS || CurMode == MOD_BUILDING {
+		ctx = worldContext()
+	}
+	all := []host.MenuItem{
+		item("Attack", key('a')), item("Board", key('b')), item("Cast", key('c')),
+		item("Descend", key('d')), item("Enter", key('e')), item("Fire", key('f')),
+		item("Get chest", key('g')), item("Hole up & camp", key('h')), item("Ignite torch", key('i')),
+		item("Jimmy lock", key('j')), item("Klimb", key('k')), item("Locate", key('l')),
+		item("Mix reagents", key('m')), item("New order", key('n')), item("Open door", key('o')),
+		item("Peer at gem", key('p')), item("Quit & save", key('q')), item("Ready weapon", key('r')),
+		item("Search", key('s')), item("Talk", key('t')), item("Use item", key('u')),
+		item("Volume", key('v')), item("Wear armour", key('w')), item("X-it craft", key('x')),
+		item("Yell", key('y')), item("Ztats", key('z')), item("Pass", KBD_SPACE),
+	}
+	if len(ctx) > 0 {
+		ctx = append(ctx, item("--------", KBD_ESC))
+	}
+	return append(ctx, all...)
+}
+
+// worldContext lists what the party can do with its neighbours and the tile it is on.
+func worldContext() []host.MenuItem {
+	var m []host.MenuItem
+	for _, d := range dirNames {
+		x, y := int(Party._x)+d.dx, int(Party._y)+d.dy
+		dk := dirKey(d.dx, d.dy)
+		if i := C_0A8B(uint8(x), uint8(y)); i >= 0 {
+			t := D_8742._npc._tile[i]
+			if Party._loc != 0 && D_8742._npc._tlkidx[i] != 0 {
+				m = append(m, item("Talk "+d.name+": "+C_1513(t), key('t'), dk))
+			} else if Party._loc == 0 || t >= TIL_80 {
+				m = append(m, item("Attack "+d.name+": "+C_1513(t), key('a'), dk))
+			}
+		}
+		if Party._loc == 0 || x < 0 || x > 31 || y < 0 || y > 31 {
+			continue
+		}
+		t := *D_8742.x32x32(y, x)
+		switch {
+		case t >= TIL_60 && t <= TIL_7E: // a counter: the merchant behind it
+			x2, y2 := x+d.dx, y+d.dy
+			if i := C_0A8B(uint8(x2), uint8(y2)); x2 >= 0 && x2 < 32 && y2 >= 0 && y2 < 32 && i >= 0 &&
+				D_8742._npc._tile[i] == TIL_52 {
+				m = append(m, item("Talk "+d.name+": merchant", key('t'), dk))
+			}
+		case t == TIL_3B && d.dy == 0:
+			m = append(m, item("Open door "+d.name, key('o'), dk))
+		case t == TIL_3A && d.dy == 0:
+			m = append(m, item("Jimmy lock "+d.name, key('j'), dk))
+		}
+	}
+	switch {
+	case tile_cur == TIL_3C && Party._tile == TIL_1F:
+		m = append(m, item("Get chest", key('g')))
+	case Party._tile == TIL_1F && (tile_cur == TIL_14 || tile_cur == TIL_15 || tile_cur == TIL_18 ||
+		(tile_cur >= TIL_10 && tile_cur <= TIL_13)):
+		m = append(m, item("Board", key('b')))
+	}
+	if Party._tile != TIL_1F {
+		if Party._tile >= TIL_10 && Party._tile <= TIL_13 {
+			m = append(m, item("Fire cannon", key('f')))
+		}
+		m = append(m, item("X-it craft", key('x')))
+	}
+	if Party._loc == 0 && Party._tile != TIL_18 {
+		for i := range D_0844 {
+			if Party._x == D_0844[i] && Party._y == D_0864[i] {
+				m = append(m, item("Enter "+D_1E98[127+i], key('e')))
+			}
+		}
+	}
+	if Party._loc == 1 {
+		switch tile_cur {
+		case TIL_1B:
+			m = append(m, item("Klimb ladder", key('k')))
+		case TIL_1C:
+			m = append(m, item("Descend ladder", key('d')))
+		}
+	}
+	return m
+}
+
+// mapClick turns a click on the map into keys: a step or a direction toward the tile, or
+// the key a "press a key" wait wants. The party's own tile opens the command menu.
+func mapClick(dx, dy int) ([]uint16, bool) {
+	if CurMode >= MOD_COMBAT { // the combat map is the view: relative to the active fighter
+		a := int(activeChara)
+		dx, dy = dx+5-int(Combat._charaX[a]), dy+5-int(Combat._charaY[a])
+	}
+	if abs(dx) >= abs(dy) {
+		dy = 0
+	} else {
+		dx = 0
+	}
+	switch {
+	case prompt == pCmd && dx == 0 && dy == 0:
+		return nil, false
+	case prompt == pCmd || prompt == pDir && (dx != 0 || dy != 0):
+		return []uint16{dirKey(dx, dy)}, true
+	case waiting && prompt == pNone:
+		return []uint16{KBD_SPACE}, true
+	}
+	return nil, true
+}
+
+func abs(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
+}

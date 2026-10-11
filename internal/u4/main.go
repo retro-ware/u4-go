@@ -62,6 +62,7 @@ func mainStep(psi, pbp_04 *int) func() {
 			C_9209()
 			if C_10FD() {
 				u4_putc(0x10)
+				ask(pCmd)
 				u_delay(25, 1)
 				if u_kbhit() != 0 {
 					si = u_kbread()

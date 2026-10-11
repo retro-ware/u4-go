@@ -3,7 +3,10 @@ package u4
 // Port of U4_GRAPH.ASM: loading the graphics driver, the screen frame, Gra_line and the
 // thunks into the driver (here: the ega package, plain pixel code).
 
-import "github.com/memmaker/u4-go/internal/ega"
+import (
+	"github.com/memmaker/u4-go/internal/ega"
+	"github.com/memmaker/u4-go/internal/host"
+)
 
 // drv is the loaded EGA.DRV.
 var drv *ega.Driver
@@ -76,22 +79,27 @@ func Gra_line(x0, y0, x1, y1, col int) { /*C_215A*/
 
 // ---- the driver thunks ----
 
-func Gra_00(y, x int)                          { drv.Gra00(y, x) } // active character square
-func Gra_01(tile, trow, srow, scol, exp int)   { drv.Gra01(tile, trow, srow, scol, exp) }
-func Gra_02(h, w, tile, row, col int)          { drv.Gra02(h, w, tile, row, col) }
-func Gra_03()                                  { drv.Gra03(SoundFlag != 0); present() }
-func Gra_04()                                  { drv.Gra04(SoundFlag != 0); present() }
-func Gra_05(h, w int, src []byte, dst int)     { drv.Gra05(h, w, src) } // display tile map
-func Gra_dot(y, x, col int)                    { drv.Dot(y, x, col) }
-func Gra_CR()                                  { txt_Y = 23; txt_X = 24; drv.CR() }
-func Gra_09()                                  { drv.Gra09() }
-func Gra_10()                                  { drv.Gra10() }
-func Gra_11(a int)                             { drv.Gra11(a) }
-func Gra_12(x, y int)                          { drv.Gra12(x, y) } // (uncalled)
-func Gra_13()                                  { drv.Gra13() }
-func Gra_dot_OR(y, x, col int)                 { drv.DotOR(y, x, col) }
-func Gra_dot_XOR(y, x, col int)                { drv.DotXOR(y, x, col) }
-func Gra_16(name string, xoff int, mem []byte) { drv.Gra16(name, xoff, mem) } // display image
+func Gra_00(y, x int)                        { drv.Gra00(y, x) } // active character square
+func Gra_01(tile, trow, srow, scol, exp int) { drv.Gra01(tile, trow, srow, scol, exp) }
+func Gra_02(h, w, tile, row, col int)        { drv.Gra02(h, w, tile, row, col) }
+func Gra_03()                                { drv.Gra03(SoundFlag != 0); present() }
+func Gra_04()                                { drv.Gra04(SoundFlag != 0); present() }
+func Gra_05(h, w int, src []byte, dst int)   { drv.Gra05(h, w, src) } // display tile map
+func Gra_dot(y, x, col int)                  { drv.Dot(y, x, col) }
+func Gra_CR()                                { txt_Y = 23; txt_X = 24; drv.CR(); histCR() }
+func Gra_09()                                { drv.Gra09() }
+func Gra_10()                                { drv.Gra10() }
+func Gra_11(a int)                           { drv.Gra11(a) }
+func Gra_12(x, y int)                        { drv.Gra12(x, y) } // (uncalled)
+func Gra_13()                                { drv.Gra13() }
+func Gra_dot_OR(y, x, col int)               { drv.DotOR(y, x, col) }
+func Gra_dot_XOR(y, x, col int)              { drv.DotXOR(y, x, col) }
+func Gra_16(name string, xoff int, mem []byte) { // display image
+	if mem == nil {
+		host.InWorld = false // a full-screen picture: the original layout until the next command
+	}
+	drv.Gra16(name, xoff, mem)
+}
 func Gra_18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 	drv.Gra18(x0, x1, y0, y1, y0p, y1p, col, erase)
 }

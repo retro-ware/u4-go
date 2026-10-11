@@ -1,6 +1,7 @@
 package host
 
 import (
+	"github.com/hajimehoshi/ebiten/v2"
 	"image"
 	"image/png"
 	"os"
@@ -20,6 +21,8 @@ import (
 //	q            quit
 //	s:NAME       save the screen as NAME.png in U4GO_SHOT
 //	g            toggle VGA/EGA graphics (F2)
+//	h:WHAT       the modern layout's input: enter, up, down, esc, f3, f4, f5, f6, or
+//	             tile:DX:DY (a click on the map, relative to the centre tile)
 //
 // While a script is set, the real mouse and keyboard are ignored.
 
@@ -105,6 +108,8 @@ func runScript() bool {
 			scriptQuit = true
 		case "g":
 			toggleGraphics()
+		case "h":
+			scriptHost(ev.raw)
 		case "s":
 			if len(ev.raw) > 0 {
 				saveShot(ev.raw[0])
@@ -114,24 +119,71 @@ func runScript() bool {
 	return true
 }
 
-func saveShot(name string) {
+var shotName string
+
+func saveShot(name string) { shotName = name }
+
+// takeShot saves the window as drawn when a shot is due.
+func takeShot(screen *ebiten.Image) {
 	dir := os.Getenv("U4GO_SHOT")
-	if dir == "" || ShowFrame == nil {
+	name := shotName
+	shotName = ""
+	if dir == "" || name == "" {
 		return
 	}
-	f := ShowFrame()
-	if f == nil {
-		return
-	}
-	img := image.NewRGBA(image.Rect(0, 0, ScreenW, ScreenH))
-	for i, c := range f.Pix[:ScreenW*ScreenH] {
-		r, g, b := f.Palette[int(c)*3]&63, f.Palette[int(c)*3+1]&63, f.Palette[int(c)*3+2]&63
-		img.Pix[i*4], img.Pix[i*4+1], img.Pix[i*4+2], img.Pix[i*4+3] = r<<2|r>>4, g<<2|g>>4, b<<2|b>>4, 255
-	}
+	b := screen.Bounds()
+	img := image.NewRGBA(b)
+	screen.ReadPixels(img.Pix)
 	out, err := os.Create(filepath.Join(dir, name+".png"))
 	if err != nil {
 		return
 	}
 	png.Encode(out, img)
 	out.Close()
+}
+
+// scriptHost plays the modern layout's input for a script.
+func scriptHost(raw []string) {
+	if len(raw) == 0 {
+		return
+	}
+	switch raw[0] {
+	case "enter":
+		if menu != nil {
+			choose(menu.Sel)
+		} else if modal != 0 {
+			modal = 0
+		} else {
+			openMenu(PromptMenu(true))
+		}
+	case "up", "down":
+		if menu != nil {
+			n := len(menu.Items)
+			d := 1
+			if raw[0] == "up" {
+				d = n - 1
+			}
+			menu.Sel = (menu.Sel + d) % n
+		}
+	case "esc":
+		menu, modal = nil, 0
+	case "f3":
+		ShowStats = !ShowStats
+	case "f4":
+		ShowText = !ShowText
+	case "f5":
+		modal = modalHistory
+	case "f6":
+		Modern = !Modern
+	case "tile":
+		if len(raw) == 3 && MapClick != nil {
+			dx, _ := strconv.Atoi(raw[1])
+			dy, _ := strconv.Atoi(raw[2])
+			if keys, ok := MapClick(dx, dy); ok {
+				KeyQueue = append(KeyQueue, keys...)
+			} else {
+				openMenu(PromptMenu(true))
+			}
+		}
+	}
 }

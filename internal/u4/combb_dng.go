@@ -199,6 +199,7 @@ func DNG_main() { /*C_84D2*/
 		u4_putc(0x10)
 		t_callback()
 		if C_10FD() {
+			ask(pCmd)
 			u_delay(25, 1)
 			if u_kbhit() != 0 {
 				si = u_kbread()

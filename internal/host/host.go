@@ -108,6 +108,12 @@ type game struct {
 	rgba *image.RGBA
 	// the 320x200 picture's placement on the window, for mapping the pointer
 	offX, offY, scaleX, scaleY float64
+	lut                        [256][4]byte
+	// the modern layout: the map's place on the window, the open menu's
+	world, menuRect        image.Rectangle
+	menuK                  float64
+	menuTop                int
+	lastMouseX, lastMouseY int
 }
 
 func (g *game) Update() error {
@@ -122,6 +128,9 @@ func (g *game) Update() error {
 	Clock += uint32(clockAcc / TPS)
 	clockAcc %= TPS
 	tickTimers()
+	if updateModern() {
+		return nil
+	}
 	tick <- struct{}{}
 	<-yielded
 	if finished.Load() {
@@ -140,7 +149,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 		return
 	}
 	pal := f.Palette
-	var lut [256][4]byte
+	lut := &g.lut
 	for i := 0; i < 256; i++ {
 		r, gg, b := pal[i*3]&63, pal[i*3+1]&63, pal[i*3+2]&63
 		lut[i] = [4]byte{r<<2 | r>>4, gg<<2 | gg>>4, b<<2 | b>>4, 0xFF}
@@ -170,6 +179,12 @@ func (g *game) Draw(screen *ebiten.Image) {
 		}
 	}
 	g.img.WritePixels(pix)
+	defer takeShot(screen)
+	if modern() {
+		g.drawModern(screen)
+		return
+	}
+	g.world = image.Rectangle{}
 
 	// Fit a 4:3 picture (320x200 shown as 320x240, the CRT's shape) in the window.
 	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()

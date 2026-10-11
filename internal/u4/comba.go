@@ -71,6 +71,7 @@ func COM_main() {
 				u4_putc(0x10)
 				D_95C8 = 2
 				C_3C54()
+				ask(pCmd)
 				u_delay(25, 1)
 				if u_kbhit() != 0 {
 					si = uint16(u_kbread())

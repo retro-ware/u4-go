@@ -254,6 +254,7 @@ func C_A4B4(bp04 int) {
 		var bp_12 [12]byte
 
 		u4_puts( /*D_2C6D*/ "\nYour Interest:\n")
+		getsWords = talkWords
 		u4_gets(bp_12[:], 11)
 		Gra_CR()
 		if bp_12[0] == 0 {

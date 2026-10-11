@@ -187,6 +187,7 @@ func u4_putl(bp0a int32, bp06 int, bp04 int) { /*C_0C03*/
 }
 
 func u4_putc(c int) { /*C_0C9F*/
+	histPut(byte(c))
 	if c == 0x10 && txt_Y != 0 {
 		musicPrompt()
 	}
@@ -432,6 +433,12 @@ func AskLetter(bp08 string, bp06, bp04 int) int { /*C_11F9*/
 			sound(1)
 		}
 		u4_puts(bp08)
+		promptText, promptLo, promptHi = bp08, bp06, bp04
+		if askingChara {
+			ask(pChara)
+		} else {
+			ask(pLetter)
+		}
 		si = u_kbread()
 		if si == KBD_ENTER || si == KBD_ESC || si == KBD_SPACE {
 			if si == KBD_ENTER || si == KBD_SPACE {
@@ -466,7 +473,9 @@ func AskChara(bp04 string) int { /*C_1287*/
 		u4_puts("1\n")
 		return 0
 	}
+	askingChara = true
 	si := AskLetter(bp04, '0', '0'+int(Party.f_1d8))
+	askingChara = false
 	if si == '0' {
 		return -2
 	}
@@ -481,6 +490,7 @@ func AskDir(bp08 string, si, di *int) { /*C_12D6*/
 	for {
 		bp_02 := 1
 		u4_puts(bp08)
+		ask(pDir)
 		bp_04 := u_kbread()
 		switch bp_04 {
 		case KBD_SPACE, KBD_ESC, KBD_BS, KBD_ENTER:
@@ -554,8 +564,15 @@ func MP_recover() { /*C_13B6*/
 func u4_gets(si []byte, bp04 int) { /*C_1445*/
 	loc_A := 0
 	var loc_B int
+	words := getsWords
+	getsWords = nil
 	for {
+		if words != nil && loc_A == 0 {
+			ask(pWords)
+			getsWords = words
+		}
 		loc_B = u_kbread()
+		getsWords = nil
 		switch loc_B {
 		case KBD_BS, KBD_0e7f, KBD_LEFT:
 			if loc_A == 0 {
@@ -655,6 +672,7 @@ func AskY_N() int { /*C_162F*/
 		if bp_02 != -1 {
 			sound(1)
 		}
+		ask(pYN)
 		bp_02 = u_kbread() & 0x7f
 		u4_toupper(&bp_02)
 		if bp_02 == 'N' || bp_02 == 'Y' || bp_02 == ' ' || bp_02 == 0x1b || bp_02 == '\r' {

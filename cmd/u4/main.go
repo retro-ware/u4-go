@@ -100,6 +100,7 @@ func main() {
 	err := host.Run("Ultima IV", *scale, func() {
 		// The title, then the game, which comes back to the title when no party is formed.
 		for gameErr == nil {
+			host.InWorld = false
 			if gameErr = title.Main(*game, *save); gameErr == nil {
 				gameErr = u4.Main()
 			}
