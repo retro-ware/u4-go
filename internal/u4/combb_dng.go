@@ -164,25 +164,21 @@ func C_7AE3(si int, bp06, bp04 uint8) {
 }
 
 func C_7B89() { // North [combat]
-	u4_puts("North\n")
 	a := int(activeChara)
 	C_7AE3(a, Combat._charaX[a], Combat._charaY[a]-1)
 }
 
 func C_7BAF() { // South [combat]
-	u4_puts("South\n")
 	a := int(activeChara)
 	C_7AE3(a, Combat._charaX[a], Combat._charaY[a]+1)
 }
 
 func C_7BD5() { // East [combat]
-	u4_puts("East\n")
 	a := int(activeChara)
 	C_7AE3(a, Combat._charaX[a]+1, Combat._charaY[a])
 }
 
 func C_7BFD() { // West [combat]
-	u4_puts("West\n")
 	a := int(activeChara)
 	C_7AE3(a, Combat._charaX[a]-1, Combat._charaY[a])
 }

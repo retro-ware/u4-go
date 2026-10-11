@@ -310,7 +310,6 @@ func CMDDIR_Up() { /*C_2B8C*/
 		w_DriftOnly()
 	default:
 		sound(0)
-		u4_puts("North\n")
 		if C_2B19() && D_95C6 != 0 {
 			t_callback()
 			sound(0)
@@ -361,7 +360,6 @@ func CMDDIR_Down() { /*C_2C8A*/
 		}
 	default:
 		sound(0)
-		u4_puts("South\n")
 		if C_2C25() && D_95C6 != 0 {
 			t_callback()
 			sound(0)
@@ -419,7 +417,6 @@ func CMDDIR_Left() { /*C_2DA9*/
 			Party._tile = TIL_14
 		}
 		sound(0)
-		u4_puts("West\n")
 		if C_2D44() && D_95C6 != 0 {
 			t_callback()
 			sound(0)
@@ -479,7 +476,6 @@ func CMDDIR_Right() { /*C_2EC5*/
 			Party._tile = TIL_15
 		}
 		sound(0)
-		u4_puts("East\n")
 		if C_2E4F() && D_95C6 != 0 {
 			t_callback()
 			sound(0)
