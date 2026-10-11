@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/memmaker/u4-go/internal/gamefs"
+	"github.com/memmaker/u4-go/internal/upgrade"
 )
 
 var (
@@ -33,7 +34,13 @@ func check(err error) {
 }
 
 // readGameFile returns a file's contents, from SaveDir or GameDir.
-func readGameFile(name string) ([]byte, bool) { return gamefs.Read(name, SaveDir, GameDir) }
+// The VGA upgrade patch's corrected .TLK files win over the game's, in either mode.
+func readGameFile(name string) ([]byte, bool) {
+	if b, ok := upgrade.TLK(name); ok {
+		return b, true
+	}
+	return gamefs.Read(name, SaveDir, GameDir)
+}
 
 // readFile returns a whole file, which must exist.
 func readFile(name string) []byte {

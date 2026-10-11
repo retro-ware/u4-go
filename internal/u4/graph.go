@@ -102,7 +102,9 @@ func Gra_animFlag()         { drv.AnimFlag() }
 func Gra_putchar(c uint8)   { drv.PutChar(int(txt_Y), int(txt_X), c) }
 
 func Gra_17() {
-	if D_943A == 1 {
+	if drv.IsVGA() { // the VGA patch's infinity is rune_0
+		drv.Gra17("rune_0.ega")
+	} else if D_943A == 1 {
 		drv.Gra17("rune_5.pic")
 	} else {
 		drv.Gra17("rune_5.ega")

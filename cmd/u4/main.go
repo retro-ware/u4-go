@@ -2,6 +2,7 @@
 // job, TITLE.EXE then AVATAR.EXE, each ported to Go.
 //
 //	u4 [-data DIR]            play with the game files in DIR (default $GOPLAY_DATA, else ./game)
+//	                          (VGA upgrade graphics; -ega for the original EGA, F2 switches)
 //	u4 -import SRC -data DIR  copy the game files out of SRC (folder, zip, ISO/BIN/CUE, GOG
 //	                          installer, loose files) into DIR, write DIR/COVER.PNG and exit
 package main
@@ -43,6 +44,7 @@ func main() {
 	save := flag.String("save", "", "directory for saved games (default: the game directory)")
 	imp := flag.String("import", "", "import the game files from this folder/zip/ISO/installer into -data and exit")
 	scale := flag.Int("scale", 3, "window scale")
+	egaMode := flag.Bool("ega", false, "start with the original EGA graphics instead of the VGA upgrade (F2 toggles)")
 	noMusic := flag.Bool("nomusic", false, "no MIDI music (Alt-V toggles it, Alt-+/Alt-- set its volume)")
 	flag.Parse()
 
@@ -81,6 +83,12 @@ func main() {
 	}
 	u4.GameDir, u4.SaveDir = *game, *save
 
+	ega.VGA = !*egaMode
+	host.ToggleGraphics = func() {
+		ega.VGA = !ega.VGA
+		title.SetVGA(ega.VGA)
+		u4.SetVGA(ega.VGA)
+	}
 	speaker.Start()
 	if !*noMusic {
 		music.Start()

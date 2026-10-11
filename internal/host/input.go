@@ -22,7 +22,7 @@ type bios struct{ scan, ascii, shifted, ctrl byte }
 var specialKeys = map[ebiten.Key]bios{
 	ebiten.KeyEscape: {0x01, 0x1b, 0x1b, 0x1b}, ebiten.KeyBackspace: {0x0e, 8, 8, 0x7f},
 	ebiten.KeyTab: {0x0f, 9, 0, 0}, ebiten.KeyEnter: {0x1c, 13, 13, 10}, ebiten.KeyNumpadEnter: {0x1c, 13, 13, 10},
-	ebiten.KeyF1: {0x3b, 0, 0, 0}, ebiten.KeyF2: {0x3c, 0, 0, 0}, ebiten.KeyF3: {0x3d, 0, 0, 0},
+	ebiten.KeyF1: {0x3b, 0, 0, 0}, ebiten.KeyF3: {0x3d, 0, 0, 0},
 	ebiten.KeyF4: {0x3e, 0, 0, 0}, ebiten.KeyF5: {0x3f, 0, 0, 0}, ebiten.KeyF6: {0x40, 0, 0, 0},
 	ebiten.KeyF7: {0x41, 0, 0, 0}, ebiten.KeyF8: {0x42, 0, 0, 0}, ebiten.KeyF9: {0x43, 0, 0, 0},
 	ebiten.KeyF10:  {0x44, 0, 0, 0},
@@ -60,6 +60,15 @@ func init() {
 func PushChar(c byte) { KeyQueue = append(KeyQueue, uint16(asciiScan[c])<<8|uint16(c)) }
 
 var keysDown = map[ebiten.Key]bool{}
+
+// ToggleGraphics, when set, is called on F2 (not passed to the game): VGA/EGA graphics.
+var ToggleGraphics func()
+
+func toggleGraphics() {
+	if ToggleGraphics != nil {
+		ToggleGraphics()
+	}
+}
 
 // AltKey, when set, gets the host's own Alt hot keys: 'v', '-' and '+' (the upgrade patch's
 // music toggle and volume keys).
@@ -101,6 +110,11 @@ func pollInput(g *game) {
 				AltKey(c)
 				altUsed = true
 			}
+		}
+	}
+	if f2 := ebiten.IsKeyPressed(ebiten.KeyF2); f2 != keysDown[ebiten.KeyF2] {
+		if keysDown[ebiten.KeyF2] = f2; f2 {
+			toggleGraphics()
 		}
 	}
 	for k, b := range specialKeys {

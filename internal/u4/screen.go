@@ -10,9 +10,10 @@ import (
 
 var frame = host.Frame{Pix: make([]byte, host.ScreenW*host.ScreenH), Palette: new([768]byte)}
 
-func init() {
-	for i, c := range ega.Palette {
-		copy(frame.Palette[i*3:], c[:])
+// SetVGA switches the game to VGA (or EGA) graphics.
+func SetVGA(on bool) {
+	if drv != nil {
+		drv.SetMode(on)
 	}
 }
 
@@ -24,6 +25,8 @@ func present() { host.Yield() }
 // (Gra_init only sets it up) shown as the host's frame.
 func resetGlobals() {
 	drv = ega.New(frame.Pix)
+	drv.Palette = frame.Palette
+	drv.SetMode(ega.VGA)
 	drv.ReadFile = readGameFile
 	drv.Present = present
 	drv.Speaker = func(bool) {} // ponytail: shake clicks silent; route to internal/speaker if missed

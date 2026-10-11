@@ -1,14 +1,21 @@
-// Package ega is Ultima IV's EGA graphics driver (EGA.DRV) redone as plain pixel code.
+// Package ega is Ultima IV's EGA graphics driver (EGA.DRV) redone as plain pixel code, and
+// the VGA driver of the "Ultima 4 VGA upgrade patch" (internal/upgrade) as a mode of it.
 //
-// The screen is a 320x200 framebuffer of colour indexes 0..15 (the EGA palette, Palette).
-// The tile set (SHAPES.EGA: 256 tiles of 16x16) and the font (CHARSET.EGA: 128 glyphs of
-// 8x8) are decoded once into per-pixel arrays, so another tile set (VGA, say) only has to
-// fill Tiles and Glyphs. Every routine keeps the original's visible result, quirks included
+// The screen is a 320x200 framebuffer of 8-bit colour indexes into a 256-colour palette:
+// in EGA mode only 0..15 are used (the EGA palette, Palette), in VGA mode all (u4vga.pal).
+// The tile set (SHAPES.EGA: 256 tiles of 16x16, or shapes.vga) and the font (CHARSET.EGA:
+// 128 glyphs of 8x8, or charset.vga) are decoded into per-pixel arrays, again on a mode
+// switch (SetMode). Every routine keeps the original's visible result, quirks included
 // (the shake, the opening doors, the dungeon walls' Bresenham slip).
 //
 // The game's colour numbers for dots and walls (CGA's 0..3) map to EGA colours through
 // colorOf; the driver's random generator is kept for the shake clicks and the animations.
 package ega
+
+import "github.com/memmaker/u4-go/internal/upgrade"
+
+// VGA is the mode the program runs in: new drivers' callers pass it to SetMode.
+var VGA = true
 
 const (
 	W = 320
@@ -31,8 +38,105 @@ type Driver struct {
 	// Gra17's opening doors).
 	Present func()
 
+	// Palette is filled with the mode's 256 colours (6-bit) by SetMode, when set.
+	Palette *[768]byte
+
 	seed [4]byte // random seed 12h,34h,56h,78h
+
+	vga                 bool
+	egaTiles, egaGlyphs []byte // the EGA files, for decoding again on a mode switch
 }
+
+// IsVGA says whether the driver is in VGA mode.
+func (d *Driver) IsVGA() bool { return d.vga }
+
+// SetMode switches to VGA (or EGA) mode: tiles, font and palette, and the pixels already on
+// the screen and in bufs (pictures kept for later) mapped to the nearest colours.
+func (d *Driver) SetMode(vga bool, bufs ...[]byte) {
+	if vga != d.vga {
+		lut := egaOf
+		if vga {
+			lut = vgaOfEGA
+		}
+		for _, b := range append(bufs, d.Pix) {
+			for i, c := range b {
+				b[i] = lut[c]
+			}
+		}
+	}
+	d.vga = vga
+	d.load()
+	if d.Palette != nil {
+		clear(d.Palette[:])
+		if vga {
+			copy(d.Palette[:], upgrade.Palette)
+		} else {
+			for i, c := range Palette {
+				copy(d.Palette[i*3:], c[:])
+			}
+		}
+	}
+}
+
+func (d *Driver) load() {
+	for t := range d.Tiles {
+		if d.vga {
+			copy(d.Tiles[t][:], upgrade.Shapes[t*256:])
+		} else {
+			unpack(d.Tiles[t][:], d.egaTiles[min(len(d.egaTiles), t*128):])
+		}
+	}
+	for c := range d.Glyphs {
+		if d.vga {
+			copy(d.Glyphs[c][:], upgrade.Charset[c*64:])
+		} else {
+			unpack(d.Glyphs[c][:], d.egaGlyphs[min(len(d.egaGlyphs), c*32):])
+		}
+	}
+}
+
+// Color is EGA colour c (0..15) as an index in the current mode's palette.
+func (d *Driver) Color(c byte) byte {
+	if d != nil && d.vga {
+		return vgaOfEGA[c&0xf]
+	}
+	return c
+}
+
+// nearest returns the index of pal's colour nearest to c.
+func nearest(pal [][3]byte, c [3]byte) byte {
+	best, bd := 0, 1<<30
+	for i, p := range pal {
+		dd := 0
+		for k := range p {
+			v := int(p[k]) - int(c[k])
+			dd += v * v
+		}
+		if dd < bd {
+			best, bd = i, dd
+		}
+	}
+	return byte(best)
+}
+
+// egaOf maps VGA palette indexes to the nearest EGA colour; vgaOfEGA EGA colours to the
+// nearest VGA index (indexes past 15 map to themselves).
+var egaOf, vgaOfEGA = func() (e, v [256]byte) {
+	var vp [][3]byte
+	for i := 0; i+3 <= len(upgrade.Palette); i += 3 {
+		vp = append(vp, [3]byte(upgrade.Palette[i:i+3]))
+	}
+	for i := range v {
+		v[i] = byte(i)
+		if i < len(vp) {
+			e[i] = nearest(Palette[:], vp[i])
+		}
+	}
+	for i, c := range Palette {
+		v[i] = nearest(vp, c)
+	}
+	return
+}()
 
 // New returns the driver drawing into pix (W*H bytes; a fresh buffer when nil).
 func New(pix []byte) *Driver {
@@ -59,16 +163,14 @@ func unpack(dst []byte, packed []byte) {
 
 // SetTiles decodes SHAPES.EGA's 256 tiles (128 bytes each).
 func (d *Driver) SetTiles(packed []byte) {
-	for t := range d.Tiles {
-		unpack(d.Tiles[t][:], packed[min(len(packed), t*128):])
-	}
+	d.egaTiles = packed
+	d.load()
 }
 
 // SetGlyphs decodes CHARSET.EGA's 128 glyphs (32 bytes each).
 func (d *Driver) SetGlyphs(packed []byte) {
-	for c := range d.Glyphs {
-		unpack(d.Glyphs[c][:], packed[min(len(packed), c*32):])
-	}
+	d.egaGlyphs = packed
+	d.load()
 }
 
 // colorOf maps the game's dot and wall colours (CGA's 0..3) to EGA colours; past the
@@ -208,16 +310,23 @@ func (d *Driver) Gra00(y, x int) {
 	for r := 0; r < 16; r++ {
 		for c := 0; c < 16; c++ {
 			if r < 2 || r >= 14 || c < 2 || c >= 14 {
+				if d.vga { // VGA: set
+					d.set((y0+r)*W+x0+c, 15)
+					continue
+				}
 				d.or((y0+r)*W+x0+c, 15)
 			}
 		}
 	}
 }
 
-// Gra01 draws row trow of a tile at screen row srow, x = (scol/2)*8, 1x or (exp != 1) 2x
-// wide.
+// Gra01 draws row trow of a tile at screen row srow, x = (scol/2)*8 (VGA: scol*4), 1x or
+// (exp != 1) 2x wide.
 func (d *Driver) Gra01(tile, trow, srow, scol, exp int) {
 	i := srow*W + (scol>>1)*8
+	if d.vga {
+		i = srow*W + scol*4
+	}
 	row := d.Tiles[tile&0xff][trow*16:]
 	for c := 0; c < 16; c++ {
 		if exp == 1 {
@@ -309,25 +418,40 @@ func (d *Driver) CR() {
 	d.fill(192, 184, 128, 8, 0)
 }
 
-// Gra09 inverts the map window (XOR colour 7, x 8..183, rows 8..183).
-func (d *Driver) Gra09() { d.invert(8, 8, 176, 176, 7) }
+// inv is the inverting XOR: colour 7, VGA FFh.
+func (d *Driver) inv() byte {
+	if d.vga {
+		return 0xff
+	}
+	return 7
+}
+
+// Gra09 inverts the map window (XOR inv, x 8..183, rows 8..183).
+func (d *Driver) Gra09() { d.invert(8, 8, 176, 176, d.inv()) }
 
 // Gra10 clears the map window.
 func (d *Driver) Gra10() { d.fill(8, 8, 176, 176, 0) }
 
 // Gra11 inverts party member a's line in the status box (XOR 7).
-func (d *Driver) Gra11(a int) { d.invert(192, ((a+1)*8)&0xffff, 120, 8, 7) }
+func (d *Driver) Gra11(a int) { d.invert(192, ((a+1)*8)&0xffff, 120, 8, d.inv()) }
 
 // Gra12 inverts one character cell (x, y) (XOR 7). The game never calls it.
-func (d *Driver) Gra12(x, y int) { d.invert(x*8, (y*8)&0xffff, 8, 8, 7) }
+func (d *Driver) Gra12(x, y int) { d.invert(x*8, (y*8)&0xffff, 8, 8, d.inv()) }
 
 // Gra13 clears the status box (x 192..311, rows 8..71).
 func (d *Driver) Gra13() { d.fill(192, 8, 120, 64, 0) }
 
 // Gra16 loads an RLE picture (byte 02h, count, value; every byte two pixels, high nibble
 // first). With mem == nil the picture is ORed onto the screen, its first row starting at
-// x = xoff*8; otherwise it is unpacked into mem (W*H pixels).
+// x = xoff*8; otherwise it is unpacked into mem (W*H pixels). In VGA mode the patch's
+// picture is used (one byte a pixel, XORed); a picture it lacks comes in EGA colours.
 func (d *Driver) Gra16(name string, xoff int, mem []byte) {
+	if d.vga {
+		if data, ok := upgrade.Picture(name); ok {
+			d.gra16VGA(data, xoff, mem)
+			return
+		}
+	}
 	data, ok := d.ReadFile(name)
 	if !ok {
 		d.Exit(3)
@@ -355,7 +479,7 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 			}
 			for ; cnt > 0; cnt-- {
 				if i >= 0 && i+1 < len(mem) {
-					mem[i], mem[i+1] = b>>4, b&0xf
+					mem[i], mem[i+1] = d.Color(b>>4), d.Color(b&0xf)
 				}
 				i += 2
 				if n -= 2; n == 0 {
@@ -374,8 +498,8 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 			}
 		}
 		for ; cnt > 0; cnt-- {
-			d.or(i+x, b>>4)
-			d.or(i+x+1, b&0xf)
+			d.or(i+x, d.Color(b>>4))
+			d.or(i+x+1, d.Color(b&0xf))
 			if x += 2; x >= W {
 				if y++; y == H {
 					return
@@ -386,12 +510,62 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 	}
 }
 
+// gra16VGA is the VGA driver's Gra16: RLE bytes XORed onto the screen (or mem, cleared
+// first) from offset xoff, until 320x200 pixels are done (a run may go past).
+func (d *Driver) gra16VGA(data []byte, xoff int, mem []byte) {
+	dst := d.Pix
+	if mem != nil {
+		clear(mem)
+		dst = mem
+	}
+	si := 0
+	next := func() byte {
+		var b byte
+		if si < len(data) {
+			b = data[si]
+		}
+		si++
+		return b
+	}
+	for i := 0; i < W*H; {
+		cnt, b := 1, next()
+		if b == 2 {
+			cnt, b = int(next()), next()
+			if cnt == 0 {
+				cnt = 0x10000
+			}
+		}
+		for ; cnt > 0; cnt-- {
+			if j := xoff + i; j >= 0 && j < len(dst) {
+				dst[j] ^= b
+			}
+			i++
+		}
+	}
+}
+
 // Gra17 opens the map window like a pair of doors onto a picture (the shrine/mystic views):
 // the old picture slides out to both sides 8 pixels a step while the new one grows from
-// the middle, 11 steps.
+// the middle, 11 steps (VGA: a pixel a step, 87 steps).
 func (d *Driver) Gra17(name string) {
 	buf := make([]byte, W*H)
 	d.Gra16(name, 0, buf)
+	if d.vga {
+		for n := 87; n > 0; n-- {
+			for r := 8; r < 184; r++ {
+				row, src := d.Pix[r*W:r*W+W], buf[r*W:r*W+W]
+				copy(row[8:8+n], row[9:9+n])
+				copy(row[184-n:184], row[183-n:183])
+				copy(row[8+n:184-n], src[8+n:184-n])
+			}
+			d.present()
+		}
+		for r := 8; r < 184; r++ {
+			d.Pix[r*W+8], d.Pix[r*W+183] = buf[r*W+8], buf[r*W+183]
+		}
+		d.present()
+		return
+	}
 	for cl := 1; cl <= 11; cl++ {
 		for r := 8; r < 184; r++ {
 			row := d.Pix[r*W : r*W+W]
@@ -480,9 +654,25 @@ func (d *Driver) Gra19(karmas [8]uint16) {
 	}
 }
 
+// spitVGA: the VGA driver's flame pixels of tile 4Bh.
+var spitVGA = [30]byte{0x76, 0x77, 0x85, 0x86, 0x94, 0x95, 0x96, 0x97, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
+	0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xd5, 0xd6, 0xd7, 0xd8, 0xe6, 0xe7}
+
 // AnimSpit makes the flames of tile 4Bh flicker: colour bit 4 flipped at random in rows
-// 7..14.
+// 7..14. VGA: each of 30 flame pixels changes one time in 32.
 func (d *Driver) AnimSpit() {
+	if d.vga {
+		t := &d.Tiles[0x4b]
+		for i := len(spitVGA) - 1; i >= 0; i-- {
+			if d.random()&0x1f == 0 {
+				// ponytail: the driver XORs with a 32-byte colour table indexed by the
+				// pixel's colour, which for the VGA tile's colours reads on into its own
+				// code; the port flips bit 2 (a shade within the palette's ramp) instead.
+				t[spitVGA[i]] ^= 4
+			}
+		}
+		return
+	}
 	masks := [8][2]byte{{0x00, 0x0c}, {0x80, 0x0d}, {0xc0, 0x1f}, {0xc0, 0x1f}, {0x80, 0x0f}, {0xc0, 0x1f}, {0x40, 0x12}, {0xc0, 0x18}}
 	t := &d.Tiles[0x4b]
 	for i, m := range masks {
@@ -515,18 +705,26 @@ func (d *Driver) AnimFlow(tile int) {
 // flagRows are the flag tiles' waving rows: {tile, row}; row and row+1 swap.
 var flagRows = [5][2]int{{0x0a, 3}, {0x0b, 1}, {0x10, 2}, {0x12, 2}, {0x0e, 1}}
 
+// flagsVGA are the VGA driver's: {tile, offset, pixels} swapped with the row below.
+var flagsVGA = [5][3]int{{0x0a, 0x34, 6}, {0x0b, 0x14, 4}, {0x0e, 0x14, 8}, {0x10, 0x2a, 4}, {0x12, 0x27, 4}}
+
 // WaveFlag swaps the two rows of flag i (0..4).
 func (d *Driver) WaveFlag(i int) {
-	a := d.Tiles[flagRows[i][0]][flagRows[i][1]*16:]
-	for k := 0; k < 16; k++ {
+	a, n := d.Tiles[flagRows[i][0]][flagRows[i][1]*16:], 16
+	if d.vga {
+		f := flagsVGA[i]
+		a, n = d.Tiles[f[0]][f[1]:], f[2]
+	}
+	for k := 0; k < n; k++ {
 		a[k], a[16+k] = a[16+k], a[k]
 	}
 }
 
-// AnimFlag waves the flags, each when the generator comes out non-negative.
+// AnimFlag waves the flags, each when the generator comes out non-negative (VGA: one time
+// in 16).
 func (d *Driver) AnimFlag() {
 	for i := range flagRows {
-		if int8(d.random()) >= 0 {
+		if r := d.random(); d.vga && r&0xf == 0 || !d.vga && int8(r) >= 0 {
 			d.WaveFlag(i)
 		}
 	}

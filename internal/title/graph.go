@@ -73,7 +73,7 @@ func Gra_C(h, w int, m []uint8, row int, pic []byte, _ int) {
 // Gra_dot (GR_DOT_EGA) ORs a pixel of colour col (0..3) at (x, y).
 func Gra_dot(y, x, col int) {
 	i := (y&0xffff)*ega.W + x&0xffff
-	wr(drv.Pix, i, rd(drv.Pix, i)|D_337A[col]&0xf)
+	wr(drv.Pix, i, rd(drv.Pix, i)|drv.Color(D_337A[col]&0xf))
 }
 
 func clearRows(y0, y1, x, w int) {
@@ -137,13 +137,13 @@ func Gra_B(w, h, src_x, src_y int, pic []byte, dst_y, rand_pts, dst_x int) {
 }
 
 // Gra_inflate (GR_INFLATE_EGA) decodes picture file name into pic (cleared first): each byte
-// is two pixels, high nibble first.
+// is two pixels, high nibble first. (In VGA mode the EGA colours map to the VGA palette's.)
 func Gra_inflate(name string, pic []byte) {
 	D_3B16 = 0
 	clear(pic)
 	CB_ega := func(al uint8) { /*C_199E*/
-		wr(pic, int(D_3B16), al>>4)
-		wr(pic, int(D_3B16)+1, al&0xf)
+		wr(pic, int(D_3B16), drv.Color(al>>4))
+		wr(pic, int(D_3B16)+1, drv.Color(al&0xf))
 		D_3B16 += 2
 	}
 	if C_23C3(name, CB_ega) == -1 {
@@ -188,6 +188,13 @@ func C_208A() uint8 {
 func Gra_putchar(c uint8) { drv.PutChar(int(txt_Y), int(txt_X), c) } /*GR_PUTCHAR_EGA*/
 
 func Gra_clrscr() { drv.ClrScr() } /*GR_CLRSCR_EGA*/
+
+// SetVGA switches the title to VGA (or EGA) graphics, its pictures included.
+func SetVGA(on bool) {
+	if drv != nil {
+		drv.SetMode(on, pTitle, pAnim, D_6940)
+	}
+}
 
 // C_217E decodes file name (SHAPES.EGZ) into buf as is (CB_dummy).
 func C_217E(name string, buf []byte) {

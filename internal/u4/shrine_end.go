@@ -93,6 +93,10 @@ var D_8362 = [8]string{"rune_1", "rune_2", "rune_0", "rune_1", "rune_2", "rune_1
 func C_E6DF(bp04 int) {
 	CurMode = MOD_VISION
 	Gra_10()
+	if drv.IsVGA() { // the VGA patch has a picture a letter: rune_1..8
+		Gra_16("rune_"+string(rune('1'+bp04))+".ega", 0, nil)
+		return
+	}
 	Gra_16(D_8362[bp04]+".ega", 0, nil)
 }
 

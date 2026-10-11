@@ -19,6 +19,7 @@ import (
 //	r:X:Y        the same with the right button
 //	q            quit
 //	s:NAME       save the screen as NAME.png in U4GO_SHOT
+//	g            toggle VGA/EGA graphics (F2)
 //
 // While a script is set, the real mouse and keyboard are ignored.
 
@@ -102,6 +103,8 @@ func runScript() bool {
 			}
 		case "q":
 			scriptQuit = true
+		case "g":
+			toggleGraphics()
 		case "s":
 			if len(ev.raw) > 0 {
 				saveShot(ev.raw[0])

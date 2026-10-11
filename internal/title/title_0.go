@@ -65,9 +65,8 @@ func resetGlobals() {
 	D_6976 = t_500{}
 
 	drv = ega.New(frame.Pix)
-	for i, c := range ega.Palette {
-		copy(frame.Palette[i*3:], c[:])
-	}
+	drv.Palette = frame.Palette
+	drv.SetMode(ega.VGA)
 	host.ShowFrame = func() *host.Frame { return &frame }
 }
 
