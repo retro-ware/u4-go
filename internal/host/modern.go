@@ -127,6 +127,12 @@ func updateModern() bool {
 // pressed reports a key that went down this tick.
 func pressed(k ebiten.Key) bool { return inpututil.IsKeyJustPressed(k) }
 
+// repeating is pressed with typematic repeat while k is held (after a quarter second, 15/s).
+func repeating(k ebiten.Key) bool {
+	d := inpututil.KeyPressDuration(k)
+	return d == 1 || d >= TPS/4 && (d-TPS/4)%(TPS/15) == 0
+}
+
 // modernInput handles the modern layout's keys and mouse. It reports whether it used the
 // tick's keyboard input, which then does not reach the game.
 func modernInput(g *game) bool {
@@ -156,9 +162,9 @@ func modernInput(g *game) bool {
 	if modal != 0 {
 		rows := 20
 		switch {
-		case pressed(ebiten.KeyArrowUp):
+		case repeating(ebiten.KeyArrowUp):
 			histBack++
-		case pressed(ebiten.KeyArrowDown):
+		case repeating(ebiten.KeyArrowDown):
 			histBack--
 		case pressed(ebiten.KeyPageUp):
 			histBack += rows
@@ -194,9 +200,9 @@ func modernInput(g *game) bool {
 		}
 		n := len(menu.Items)
 		switch {
-		case pressed(ebiten.KeyArrowUp):
+		case repeating(ebiten.KeyArrowUp):
 			menu.Sel = (menu.Sel + n - 1) % n
-		case pressed(ebiten.KeyArrowDown):
+		case repeating(ebiten.KeyArrowDown):
 			menu.Sel = (menu.Sel + 1) % n
 		case pressed(ebiten.KeyPageUp), pressed(ebiten.KeyHome):
 			menu.Sel = 0
@@ -263,11 +269,8 @@ func (g *game) text(lines []string, sel int, title string) *ebiten.Image {
 			for k := 0; k < 8; k++ {
 				v := gl[r*8+k]
 				rgb := g.lut[v]
-				if inv { // the selection: dark letters on the colour of the border's pipe
+				if inv && v == 0 { // the selection: the letters on the colour of the border's pipe
 					rgb = g.lut[g.pix[3*ScreenW+20]]
-					if v != 0 {
-						rgb = [4]byte{0, 0, 0, 0xff}
-					}
 				}
 				o := ((cy*8+r)*w*8 + cx*8 + k) * 4
 				copy(pix[o:o+4], rgb[:])

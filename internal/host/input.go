@@ -35,6 +35,15 @@ var specialKeys = map[ebiten.Key]bios{
 // scan codes of the printable keys, by unshifted ASCII
 var asciiScan = map[byte]byte{}
 
+// KeyWord is the BIOS key word of typing c: its scan code and c.
+func KeyWord(c byte) uint16 {
+	l := c
+	if c >= 'A' && c <= 'Z' {
+		l = c + 'a' - 'A'
+	}
+	return uint16(asciiScan[l])<<8 | uint16(c)
+}
+
 func init() {
 	rows := []struct {
 		first byte

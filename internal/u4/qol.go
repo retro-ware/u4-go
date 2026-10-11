@@ -125,7 +125,7 @@ var dirNames = []struct {
 	name   string
 }{{0, -1, "North"}, {0, 1, "South"}, {1, 0, "East"}, {-1, 0, "West"}}
 
-func key(c byte) uint16 { return uint16(c) } // the game only tests the ASCII byte of letters
+func key(c byte) uint16 { return host.KeyWord(c) }
 
 func item(label string, keys ...uint16) host.MenuItem {
 	return host.MenuItem{Label: label, Keys: keys}
@@ -245,27 +245,62 @@ func printedChoices() map[byte]string {
 	return got
 }
 
-// commandItems are the commands, those that act on what is around the party first.
+// commandItems are the commands that apply where the party is: first what it can do with
+// its neighbours and the ground it stands on, then what it can do anywhere with what it has.
 func commandItems() []host.MenuItem {
-	var ctx []host.MenuItem
-	if CurMode == MOD_OUTDOORS || CurMode == MOD_BUILDING {
-		ctx = worldContext()
+	var m []host.MenuItem
+	when := func(ok bool, label string, c byte) {
+		if ok {
+			m = append(m, item(label, key(c)))
+		}
 	}
-	all := []host.MenuItem{
-		item("Attack", key('a')), item("Board", key('b')), item("Cast", key('c')),
-		item("Descend", key('d')), item("Enter", key('e')), item("Fire", key('f')),
-		item("Get chest", key('g')), item("Hole up & camp", key('h')), item("Ignite torch", key('i')),
-		item("Jimmy lock", key('j')), item("Klimb", key('k')), item("Locate", key('l')),
-		item("Mix reagents", key('m')), item("New order", key('n')), item("Open door", key('o')),
-		item("Peer at gem", key('p')), item("Quit & save", key('q')), item("Ready weapon", key('r')),
-		item("Search", key('s')), item("Talk", key('t')), item("Use item", key('u')),
-		item("Volume", key('v')), item("Wear armour", key('w')), item("X-it craft", key('x')),
-		item("Yell", key('y')), item("Ztats", key('z')), item("Pass", KBD_SPACE),
+	mixtures := false
+	for _, n := range Party._mixtures {
+		mixtures = mixtures || n != 0
 	}
-	if len(ctx) > 0 {
-		ctx = append(ctx, item("--------", KBD_ESC))
+	switch {
+	case CurMode >= MOD_COMBAT:
+		m = append(m, item("Attack", key('a')))
+		when(mixtures, "Cast", 'c')
+		when(true, "Ready weapon", 'r')
+		when(len(usableItems()) > 0, "Use item", 'u')
+		when(true, "Ztats", 'z')
+	case CurMode == MOD_DUNGEON:
+		t := tile_cur & 0xf0
+		when(t == 0x10 || t == 0x30, "Klimb ladder", 'k')
+		when(t == 0x20 || t == 0x30, "Descend ladder", 'd')
+		when(t == 0x40, "Get chest", 'g')
+		when(mixtures, "Cast", 'c')
+		when(true, "Hole up & camp", 'h')
+		when(Party._torches != 0, "Ignite torch", 'i')
+		when(true, "Mix reagents", 'm')
+		when(Party.f_1d8 > 1, "New order", 'n')
+		when(Party._gems != 0, "Peer at gem", 'p')
+		when(true, "Save game", 'q')
+		when(true, "Ready weapon", 'r')
+		when(true, "Search", 's')
+		when(len(usableItems()) > 0, "Use item", 'u')
+		when(true, "Wear armour", 'w')
+		when(true, "Ztats", 'z')
+	default:
+		m = worldContext()
+		when(Party._tile == TIL_18 && Party.f_1dc == 0, "Klimb (lift off)", 'k')
+		when(Party._tile == TIL_18 && Party.f_1dc != 0, "Descend (land)", 'd')
+		when(mixtures, "Cast", 'c')
+		when(Party._loc == 0, "Hole up & camp", 'h')
+		when(Party._sextants != 0 && Party._loc == 0, "Locate", 'l')
+		when(true, "Mix reagents", 'm')
+		when(Party.f_1d8 > 1, "New order", 'n')
+		when(Party._gems != 0, "Peer at gem", 'p')
+		when(Party._loc == 0, "Save game", 'q')
+		when(true, "Ready weapon", 'r')
+		when(true, "Search", 's')
+		when(len(usableItems()) > 0, "Use item", 'u')
+		when(true, "Wear armour", 'w')
+		when(Party._tile == TIL_14 || Party._tile == TIL_15, "Yell", 'y')
+		when(true, "Ztats", 'z')
 	}
-	return append(ctx, all...)
+	return append(m, item("Volume", key('v')), item("Pass", KBD_SPACE))
 }
 
 // worldContext lists what the party can do with its neighbours and the tile it is on.
@@ -310,7 +345,9 @@ func worldContext() []host.MenuItem {
 		if Party._tile >= TIL_10 && Party._tile <= TIL_13 {
 			m = append(m, item("Fire cannon", key('f')))
 		}
-		m = append(m, item("X-it craft", key('x')))
+		if Party._tile != TIL_18 || Party.f_1dc == 0 {
+			m = append(m, item("X-it craft", key('x')))
+		}
 	}
 	if Party._loc == 0 && Party._tile != TIL_18 {
 		for i := range D_0844 {

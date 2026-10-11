@@ -96,7 +96,6 @@ func Run(title string, scale int, gameMain func()) error {
 	ebiten.SetWindowSize(ScreenW*scale, ScreenH*scale*6/5)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetTPS(TPS)
-	ebiten.SetCursorMode(ebiten.CursorModeHidden)
 	go func() {
 		<-tick
 		defer func() {

@@ -85,24 +85,21 @@ func CMD_HoleUp() { /*C_8AB0*/
 // ---- U4_Q_N_V.C ----
 
 func CMD_Quit() { /*C_6F29*/
-	u4_puts("Quit & Save...\n")
+	// The replies say plainly what happened (the original: "Quit & Save...", "Not Here!").
+	u4_puts("Save game: ")
 	u4_putl(int32(Party._moves), 1, '0')
 	u4_puts(" moves\n")
-	if Party._loc != 0 {
-		if Party._loc < 0x11 || Party._loc > 0x18 {
-			u4_puts("Not Here!\n")
-			return
-		}
-	}
-	Save("PARTY.SAV", &Party)
-	if Party._loc == 0 {
-		Save("MONSTERS.SAV", &D_8742._npc)
-	}
-	if Party._loc < 0x11 || Party._loc > 0x18 {
+	dungeon := Party._loc >= 0x11 && Party._loc <= 0x18
+	if Party._loc != 0 && !dungeon {
+		u4_puts("Can't save in\ntowns. Not saved!\n")
 		return
 	}
+	Save("PARTY.SAV", &Party)
 	Save("MONSTERS.SAV", &D_8742._npc)
-	SaveBytes("DNGMAP.SAV", D_8742._map[:0x200])
+	if dungeon {
+		SaveBytes("DNGMAP.SAV", D_8742._map[:0x200])
+	}
+	u4_puts("Game saved.\n")
 }
 
 const D_21F4 = ", You must lead!\n"

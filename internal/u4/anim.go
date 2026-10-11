@@ -60,12 +60,17 @@ func C_35C7() {
 
 var D_1656 = [7]int{192, 96, 60, 36, 20, 12, 8}
 
+// animOdds are the odds (of 256) that a sprite changes its frame at a redraw. The original
+// gives machines past its table 0xff, a new frame nearly every redraw, far too fast at the
+// port's 35 redraws a second; animSpeed is the table's entry used instead (about four
+// frame changes a second, a 386's look). Only the threshold differs: the same random
+// numbers are drawn.
 func animOdds() int {
-	if speed_info < 8 {
-		return D_1656[speed_info-1]
-	}
-	return 0xff
+	return D_1656[min(speed_info, animSpeed)-1]
 }
+
+// animSpeed is the calibration knob for the sprites' animation rate (1 fast .. 7 slow).
+const animSpeed = 4
 
 // animate sprites
 func C_3605() {
