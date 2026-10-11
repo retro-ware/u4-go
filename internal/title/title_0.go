@@ -412,8 +412,25 @@ func main_() { /*C_0EAA*/
 	D_6E80 = 1
 	C_05A4()
 	C_0B45()
+	// The port's addition: the cursor keys pick an option, Enter takes it (the letters
+	// still work). The picked line is shown inverted.
+	sel := 1
+	mark := func() {
+		for x := 11; x < 29; x++ {
+			drv.Gra12(x, 17+sel)
+		}
+	}
 	for {
+		mark()
 		bp_02 := u_kbread()
+		mark()
+		switch bp_02 {
+		case KBD_UP, KBD_DOWN:
+			sel = (sel + map[int]int{KBD_UP: 2, KBD_DOWN: 1}[bp_02]) % 3
+			continue
+		case KBD_ENTER:
+			bp_02 = []int{KBD_R, KBD_J, KBD_I}[sel]
+		}
 		if u4_isupper(uint8(bp_02)) {
 			bp_02 = bp_02&0xff00 | int(uint8(bp_02)+'a'-'A')
 		}
@@ -462,6 +479,8 @@ const (
 	KBD_SPACE = 0x3920
 	KBD_ENTER = 0x1c0d
 	KBD_LEFT  = 0x4B00
+	KBD_UP    = 0x4800
+	KBD_DOWN  = 0x5000
 	KBD_A     = 0x1E61
 	KBD_B     = 0x3062
 	KBD_I     = 0x1769
