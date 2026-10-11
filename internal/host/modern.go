@@ -263,10 +263,9 @@ func (g *game) text(lines []string, sel int, title string) *ebiten.Image {
 			for k := 0; k < 8; k++ {
 				v := gl[r*8+k]
 				rgb := g.lut[v]
-				if inv {
-					if v == 0 {
-						rgb = [4]byte{0xd0, 0xb0, 0x60, 0xff}
-					} else {
+				if inv { // the selection: dark letters on the colour of the border's pipe
+					rgb = g.lut[g.pix[3*ScreenW+20]]
+					if v != 0 {
 						rgb = [4]byte{0, 0, 0, 0xff}
 					}
 				}
@@ -297,19 +296,50 @@ func (g *game) text(lines []string, sel int, title string) *ebiten.Image {
 	return img
 }
 
-// drawBox draws img over screen at (x, y) scaled by k, framed, slightly see-through.
-func drawBox(screen, img *ebiten.Image, x, y, k float64, alpha float32) image.Rectangle {
+// The pieces of the original screen's border (8x8 cells of the play screen) that frame
+// every overlay, menu and window: the corner stud and the pipes.
+var (
+	cellCorner = image.Rect(0, 0, 8, 8)
+	cellTop    = image.Rect(16, 0, 24, 8)
+	cellLeft   = image.Rect(0, 40, 8, 48)
+	cellRight  = image.Rect(312, 40, 320, 48)
+)
+
+// piece draws the border cell c stretched over w x h window pixels at (x, y).
+func (g *game) piece(screen *ebiten.Image, c image.Rectangle, x, y, w, h float64) {
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(w/8, h/8)
+	op.GeoM.Translate(x, y)
+	screen.DrawImage(g.img.SubImage(c).(*ebiten.Image), op)
+}
+
+// drawBox draws img scaled by k with its top left at (x, y), in the original's border
+// (one cell, 8k, around it). It returns the content's place.
+func (g *game) drawBox(screen, img *ebiten.Image, x, y, k float64) image.Rectangle {
 	b := img.Bounds()
-	r := image.Rect(int(x), int(y), int(x+float64(b.Dx())*k), int(y+float64(b.Dy())*k))
-	frame := r.Inset(-2)
-	screen.SubImage(frame).(*ebiten.Image).Fill(color.RGBA{0x90, 0x78, 0x40, 0xff})
+	w, h, e := float64(b.Dx())*k, float64(b.Dy())*k, 8*k
+	r := image.Rect(int(x), int(y), int(x+w), int(y+h))
+	screen.SubImage(r).(*ebiten.Image).Fill(color.Black)
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(k, k)
 	op.GeoM.Translate(x, y)
-	op.ColorScale.ScaleAlpha(alpha)
-	screen.SubImage(r).(*ebiten.Image).Fill(color.Black)
 	screen.DrawImage(img, op)
+	g.piece(screen, cellTop, x, y-e, w, e)
+	g.piece(screen, cellTop, x, y+h, w, e)
+	g.piece(screen, cellLeft, x-e, y, e, h)
+	g.piece(screen, cellRight, x+w, y, e, h)
+	for _, c := range [][2]float64{{x - e, y - e}, {x + w, y - e}, {x - e, y + h}, {x + w, y + h}} {
+		g.piece(screen, cellCorner, c[0], c[1], e, e)
+	}
 	return r
+}
+
+// drawPart draws a part of the play screen that has its own border as it is.
+func (g *game) drawPart(screen *ebiten.Image, part image.Rectangle, x, y, k float64) {
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(k, k)
+	op.GeoM.Translate(x, y)
+	screen.DrawImage(g.img.SubImage(part).(*ebiten.Image), op)
 }
 
 // drawModern draws the play screen in the modern layout.
@@ -349,20 +379,19 @@ func (g *game) drawModern(screen *ebiten.Image) {
 	op.GeoM.Translate(float64(wx), float64(wy))
 	screen.DrawImage(g.img.SubImage(image.Rect(8, 8, 184, 184)).(*ebiten.Image), op)
 
-	// overlays: about a third of the map's scale, at least 2
+	// overlays: about a third of the map's scale, at least 2; the parts of the play screen
+	// that have their own border are shown with it
 	ok := max(2, float64(int(k/1.6)))
-	margin := float64(sh) / 60
+	fw, fh := float64(sw), float64(sh)
 	if ShowStats {
-		drawBox(screen, g.img.SubImage(image.Rect(192, 8, 312, 88)).(*ebiten.Image),
-			float64(sw)-120*ok-margin, margin, ok, 0.9)
-		// the moons (top border) and the wind (bottom border) of the map window
-		drawBox(screen, g.img.SubImage(image.Rect(8, 0, 184, 8)).(*ebiten.Image), margin, margin, ok, 0.9)
-		drawBox(screen, g.img.SubImage(image.Rect(8, 184, 184, 192)).(*ebiten.Image),
-			margin, float64(sh)-8*ok-margin, ok, 0.9)
+		// the party box with food and gold, and the moons and the wind bars of the map
+		g.drawPart(screen, image.Rect(184, 0, 320, 96), fw-136*ok, 0, ok)
+		g.drawPart(screen, image.Rect(0, 0, 192, 8), 0, 0, ok)
+		g.drawPart(screen, image.Rect(0, 184, 192, 200), 0, fh-16*ok, ok)
 	}
 	if ShowText {
-		drawBox(screen, g.img.SubImage(image.Rect(192, 96, 320, 192)).(*ebiten.Image),
-			float64(sw)-128*ok-margin, float64(sh)-96*ok-margin, ok, 0.9)
+		g.drawBox(screen, g.img.SubImage(image.Rect(192, 96, 320, 192)).(*ebiten.Image),
+			fw-136*ok, fh-104*ok, ok)
 	}
 
 	g.menuRect = image.Rectangle{}
@@ -397,7 +426,7 @@ func (g *game) centred(screen, img *ebiten.Image, k float64, sw, sh int) image.R
 	b := img.Bounds()
 	x := (float64(sw) - float64(b.Dx())*k) / 2
 	y := (float64(sh) - float64(b.Dy())*k) / 2
-	return drawBox(screen, img, x, y, k, 0.95)
+	return g.drawBox(screen, img, x, y, k)
 }
 
 // menuRow is the menu row under window pixel (x, y).

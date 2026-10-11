@@ -109,6 +109,7 @@ type game struct {
 	// the 320x200 picture's placement on the window, for mapping the pointer
 	offX, offY, scaleX, scaleY float64
 	lut                        [256][4]byte
+	pix                        []byte // the frame's palette indexes, for sampling its border
 	// the modern layout: the map's place on the window, the open menu's
 	world, menuRect        image.Rectangle
 	menuK                  float64
@@ -148,6 +149,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	if f == nil {
 		return
 	}
+	g.pix = f.Pix
 	pal := f.Palette
 	lut := &g.lut
 	for i := 0; i < 256; i++ {
