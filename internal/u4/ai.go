@@ -126,7 +126,7 @@ func C_96B9(bp06, bp04 int) bool {
 		return false
 	}
 	u4_puts(cstr(Party.chara[bp06]._name[:]))
-	u4_puts(/*D_29CA*/ " is Killed!\n")
+	u4_puts( /*D_29CA*/ " is Killed!\n")
 	karma_inc(&Party._sacri, 1)
 	dspl_Stats()
 	C_10FD()
@@ -170,36 +170,36 @@ func C_978C(bp0a uint8, bp08, bp06, bp04 int) {
 	u4_putc(' ')
 	switch hit_tile {
 	case TIL_44:
-		u4_puts(/*D_29D7*/ "Poisoned!\n")
+		u4_puts( /*D_29D7*/ "Poisoned!\n")
 		C_9764(si)
 		if U4_RND1(1) != 0 || Party.chara[si]._stat != 'G' {
-			u4_puts(/*D_29E2*/ "Failed.\n")
+			u4_puts( /*D_29E2*/ "Failed.\n")
 		} else {
 			Party.chara[si]._stat = 'P'
 		}
 	case TIL_45:
-		u4_puts(/*D_29EB*/ "Electrified!\n")
+		u4_puts( /*D_29EB*/ "Electrified!\n")
 		C_96B9(si, bp08)
 	case TIL_46:
-		u4_puts(/*D_29F9*/ "Fiery Hit!\n")
+		u4_puts( /*D_29F9*/ "Fiery Hit!\n")
 		C_96B9(si, bp08)
 	case TIL_47:
-		u4_puts(/*D_2A05*/ "Slept!\n")
+		u4_puts( /*D_2A05*/ "Slept!\n")
 		C_9764(si)
 		if U4_RND1(1) != 0 || Party.chara[si]._stat != 'G' {
-			u4_puts(/*D_2A0D*/ "Failed.\n")
+			u4_puts( /*D_2A0D*/ "Failed.\n")
 		} else {
 			Party.chara[si]._stat = 'S'
 			Fighters._chtile[si] = TIL_38
 		}
 	case TIL_4C:
-		u4_puts(/*D_2A16*/ "Lava Hit!\n")
+		u4_puts( /*D_2A16*/ "Lava Hit!\n")
 		C_96B9(si, bp08)
 	case TIL_4E:
-		u4_puts(/*D_2A21*/ "Magical Hit!\n")
+		u4_puts( /*D_2A21*/ "Magical Hit!\n")
 		C_96B9(si, bp08)
 	default:
-		u4_puts(/*D_2A2F*/ "Hit!\n")
+		u4_puts( /*D_2A2F*/ "Hit!\n")
 		C_96B9(si, bp08)
 	}
 	hit_tile = 0
@@ -327,7 +327,7 @@ func C_9BE5(bp06, bp04 int) int {
 func C_9C56(bp04 int) {
 	Gra_CR()
 	u4_puts(C_1513(Fighters._tile[bp04]))
-	u4_puts(/*D_2A35*/ " Flees!\n")
+	u4_puts( /*D_2A35*/ " Flees!\n")
 	if C_0AFE(Fighters._tile[bp04]) != 0 {
 		karma_inc(&Party._compa, 1)
 		karma_inc(&Party._justi, 1)

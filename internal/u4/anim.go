@@ -159,14 +159,14 @@ func C_38BB() {
 		D_96F9[si] = TIL_7E
 	}
 	D_96F9[5*11+5] = *Combat_MAP(5, 5) // display character's icon
-	C_376F(0, -1, 5, 4)  // UP
-	C_376F(0, 1, 5, 6)   // DOWN
-	C_376F(-1, 0, 4, 5)  // LEFT
-	C_376F(1, 0, 6, 5)   // RIGHT
-	C_376F(1, 1, 6, 6)   // DOWN RIGHT
-	C_376F(1, -1, 6, 4)  // UP RIGHT
-	C_376F(-1, 1, 4, 6)  // DOWN LEFT
-	C_376F(-1, -1, 4, 4) // UP LEFT
+	C_376F(0, -1, 5, 4)                // UP
+	C_376F(0, 1, 5, 6)                 // DOWN
+	C_376F(-1, 0, 4, 5)                // LEFT
+	C_376F(1, 0, 6, 5)                 // RIGHT
+	C_376F(1, 1, 6, 6)                 // DOWN RIGHT
+	C_376F(1, -1, 6, 4)                // UP RIGHT
+	C_376F(-1, 1, 4, 6)                // DOWN LEFT
+	C_376F(-1, -1, 4, 4)               // UP LEFT
 }
 
 func C_3960() {

@@ -50,9 +50,9 @@ func DNG_X_m(x, dir int) int { return (x - sc(D_080C[dir])) & 7 }
 func DNG_Y_p(y, dir int) int { return (y + sc(D_0810[dir])) & 7 }
 func DNG_Y_m(y, dir int) int { return (y - sc(D_0810[dir])) & 7 }
 
-func u4_lower(c int) int     { return c + 'a' - 'A' }
-func u4_isupper(c int) bool  { return c >= 'A' && c <= 'Z' }
-func u4_islower(c int) bool  { return c >= 'a' && c <= 'z' }
+func u4_lower(c int) int    { return c + 'a' - 'A' }
+func u4_isupper(c int) bool { return c >= 'A' && c <= 'Z' }
+func u4_islower(c int) bool { return c >= 'a' && c <= 'z' }
 func u4_toupper(c *int) {
 	if u4_islower(*c) {
 		*c -= 'a' - 'A'
@@ -96,7 +96,7 @@ type t_500 struct {
 	_npc tNPC
 }
 
-func (t *t_500) x32x32(y, x int) *uint8   { return &t._map[y*32+x] }
+func (t *t_500) x32x32(y, x int) *uint8    { return &t._map[y*32+x] }
 func (t *t_500) x8x8x8(z, y, x int) *uint8 { return &t._map[z*64+y*8+x] }
 
 type tChara struct { // size 0x27
@@ -365,8 +365,7 @@ var (
 
 // ---- LOW.ASM ----
 var (
-	speed_info  uint16
-	equip_flags uint16
+	speed_info uint16
 )
 
 // ---- U4_SOUND.ASM ----

@@ -5,6 +5,7 @@ package speaker
 
 import (
 	"encoding/binary"
+	"os"
 	"sync"
 	"time"
 
@@ -27,9 +28,9 @@ var (
 	lp      float64 // one-pole low-pass state (the speaker is no ideal square)
 )
 
-// Start opens the audio stream, once.
+// Start opens the audio stream, once. Scripted test runs (U4GO_INPUT) stay silent.
 func Start() {
-	if started {
+	if started || os.Getenv("U4GO_INPUT") != "" {
 		return
 	}
 	started = true

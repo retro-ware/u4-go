@@ -24,10 +24,10 @@ var (
 var (
 	cursor_rate uint16 /*D_0672*/
 	D_0674      uint16
-	D_0676      uint16 = 0xffff // display cursor flag
-	seed_128    [16]byte        // random seeds (D_8732)
-	D_8C42      uint8           // cursor state {0, 1, 2, 3}
-	D_8C43      uint16          // cursor update counter
+	D_0676      uint16   = 0xffff // display cursor flag
+	seed_128    [16]byte          // random seeds (D_8732)
+	D_8C42      uint8             // cursor state {0, 1, 2, 3}
+	D_8C43      uint16            // cursor update counter
 )
 
 // dosSeconds is DOS's clock (int 21h/2Ch) seconds, from the host clock.
@@ -157,26 +157,6 @@ func u_kbflush() {
 	}
 }
 
-// get current default drive (1 = A:)
-func C_1814() int { return 3 }
-
-// select disk
-func C_181D(d int) {}
-
-// test file
-func C_182F(name string) int {
-	if _, ok := readGameFile(name); ok {
-		return 1
-	}
-	return 0
-}
-
-// piracy check (reads track 9 of the floppy): success
-func C_184F() int { return 0 }
-
-// set critical error handler
-func C_18A2() {}
-
 // ---- LOW.ASM ----
 
 // psp holds the command line: _80[0] the length, _80[2] the graphics letter, _80[4] the
@@ -184,7 +164,6 @@ func C_18A2() {}
 var psp [0x100]byte
 
 func low_init() { /*C_0012*/
-	equip_flags = 0x0001 // one floppy drive
 	t := time.Now()
 	dx := uint16(t.Second())<<8 | uint16(t.Nanosecond()/10000000)
 	cx := uint16(t.Hour())<<8 | uint16(t.Minute())

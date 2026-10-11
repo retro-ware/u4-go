@@ -8,14 +8,14 @@ var Wall_x1 = [6]uint8{0xB7, 0x97, 0x77, 0x67, 0x60, 0x00} /*D_2D7A*/
 var Wall_y0 = [6]uint8{0x08, 0x28, 0x48, 0x58, 0x5F, 0x00} /*D_2D80*/
 var Wall_y1 = [6]uint8{0xB7, 0x97, 0x77, 0x67, 0x60, 0x00} /*D_2D86*/
 
-var LDoor_x0 = [4]uint8{0x08, 0x30, 0x4C, 0x5A}  /*D_2D8C*/
-var LDoor_x1 = [4]uint8{0x18, 0x40, 0x54, 0x5C}  /*D_2D90*/
-var RDoor_x0 = [4]uint8{0xB7, 0x8F, 0x72, 0x64}  /*D_2D94*/
-var RDoor_x1 = [4]uint8{0xA7, 0x7F, 0x6A, 0x62}  /*D_2D98*/
-var Door_y0 = [4]uint8{0x34, 0x48, 0x56, 0x5A}   /*D_2D9C*/
-var Door_y0p = [4]uint8{0x3D, 0x51, 0x5B, 0x5F}  /*D_2DA0*/
-var Door_y1 = [4]uint8{0xB7, 0x8F, 0x73, 0x65}   /*D_2DA4*/
-var Door_y1p = [4]uint8{0xA7, 0x7F, 0x6B, 0x62}  /*D_2DA8*/
+var LDoor_x0 = [4]uint8{0x08, 0x30, 0x4C, 0x5A} /*D_2D8C*/
+var LDoor_x1 = [4]uint8{0x18, 0x40, 0x54, 0x5C} /*D_2D90*/
+var RDoor_x0 = [4]uint8{0xB7, 0x8F, 0x72, 0x64} /*D_2D94*/
+var RDoor_x1 = [4]uint8{0xA7, 0x7F, 0x6A, 0x62} /*D_2D98*/
+var Door_y0 = [4]uint8{0x34, 0x48, 0x56, 0x5A}  /*D_2D9C*/
+var Door_y0p = [4]uint8{0x3D, 0x51, 0x5B, 0x5F} /*D_2DA0*/
+var Door_y1 = [4]uint8{0xB7, 0x8F, 0x73, 0x65}  /*D_2DA4*/
+var Door_y1p = [4]uint8{0xA7, 0x7F, 0x6B, 0x62} /*D_2DA8*/
 var D_2DAC = [4]uint8{0x08, 0x30, 0x4C, 0x5A}
 var D_2DB0 = [4]uint8{0x18, 0x40, 0x54, 0x5D}
 var D_2DB4 = [4]uint8{0xB7, 0x8F, 0x73, 0x65}
@@ -36,18 +36,18 @@ var D_2DE8 = [4]uint8{0x6F, 0x67, 0x63, 0x60}    // down ladder rung 3 y
 var D_2DEC, D_2DEE uint16
 
 var (
-	STA_A uint8  // tile_forward_1
-	STA_B uint8  // tile_forward_2
-	STA_C bool   // <backup (Party.f_1dc == 0)>
-	STA_D int16  // <backup Party._z>
-	STA_E int    // current rendering depth
-	STA_F uint8  // <backup Party._x>
-	STA_G uint16 // <backup Party._dir>
-	STA_H uint8  // <backup Party._y>
-	STA_I uint8  // <backup tile_cur>
-	STA_J uint8  // <backup tile_forward>
-	STA_K uint8  // <backup tile_forward_1>
-	STA_L uint8  // <backup tile_forward_2>
+	STA_A  uint8  // tile_forward_1
+	STA_B  uint8  // tile_forward_2
+	STA_C  bool   // <backup (Party.f_1dc == 0)>
+	STA_D  int16  // <backup Party._z>
+	STA_E  int    // current rendering depth
+	STA_F  uint8  // <backup Party._x>
+	STA_G  uint16 // <backup Party._dir>
+	STA_H  uint8  // <backup Party._y>
+	STA_I  uint8  // <backup tile_cur>
+	STA_J  uint8  // <backup tile_forward>
+	STA_K  uint8  // <backup tile_forward_1>
+	STA_L  uint8  // <backup tile_forward_2>
 	D_8CFA int
 )
 
