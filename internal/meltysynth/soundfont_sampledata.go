@@ -5,7 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
+
+// readSamples decodes n 16-bit samples in slices, pausing between them: in a browser a
+// pause is what returns to the event loop, so loading a large SoundFont on a goroutine
+// doesn't freeze the game. (u4-go change; upstream used one binary.Read.)
+func readSamples(r io.Reader, n int) ([]int16, error) {
+	out := make([]int16, n)
+	buf := make([]byte, 1<<20)
+	for i := 0; i < n; {
+		k := min(len(buf)/2, n-i)
+		if _, err := io.ReadFull(r, buf[:2*k]); err != nil {
+			return nil, err
+		}
+		for j := range k {
+			out[i+j] = int16(binary.LittleEndian.Uint16(buf[2*j:]))
+		}
+		i += k
+		time.Sleep(time.Millisecond)
+	}
+	return out, nil
+}
 
 type soundFontSampleData struct {
 	bitsPerSample int32
@@ -58,8 +79,7 @@ func newSoundFontSampleData(r io.Reader) (*soundFontSampleData, error) {
 		switch id {
 		case "smpl":
 			result.bitsPerSample = 16
-			result.samples = make([]int16, size/2)
-			err = binary.Read(r, binary.LittleEndian, result.samples)
+			result.samples, err = readSamples(r, int(size/2))
 		case "sm24":
 			// 24 bit audio is not supported.
 			n, err = r.Read(make([]byte, size))
