@@ -17,7 +17,7 @@ func TestInflate(t *testing.T) {
 	if err != nil {
 		t.Skip("no game files")
 	}
-	speed_info = 0xffff // no pacing (cpu would yield to a host that isn't running)
+
 	got := make([]byte, 0x8000)
 	C_217E("SHAPES.EGZ", got)
 	if !bytes.Equal(got, want) {

@@ -5,6 +5,8 @@ package title
 // disks; C_32CB, a floppy track 9 piracy check, is never called.
 
 import (
+	"time"
+
 	"github.com/memmaker/u4-go/internal/host"
 )
 
@@ -14,22 +16,19 @@ var (
 	D_31C0      uint16   = 0xffff /*display cursor flag*/
 	seed_128    [16]byte          /*D_6966 random seeds*/
 	D_6E76      uint8             /*cursor state {0, 1, 2, 3}*/
-	D_6E77      uint16            /*cursor update counter*/
-)
-
-// Costs of the DOS/BIOS calls in the cycle model (calibration knobs): int 16h status + the
-// generator in u_kbhit, int 21h/2Ch get time in u_delay's loop.
-const (
-	kbhitCycles   = 400
-	getTimeCycles = 2500
 )
 
 func dosSeconds() uint16 { return uint16(host.Clock/256) % 60 }
 
+// now is the host clock as a duration.
+func now() time.Duration { return time.Duration(host.Clock) * time.Second / 256 }
+
+var cursorDue time.Duration // when the cursor turns next (D_6E77 counted u_delay passes)
+
 // u_delay waits bp04 seconds; with bp06 set a key ends the wait, and with bp06 & D_31C0 the
 // cursor spins at txt_X/txt_Y.
 func u_delay(bp04, bp06 uint16) { /*C_3149*/
-	D_6E77 = 1
+	cursorDue = 0
 	D_31BE = cursor_rate
 	si := dosSeconds() + bp04
 	if si >= 60 {
@@ -49,19 +48,18 @@ C_318C:
 	t_callback()
 	if bp06&D_31C0 != 0 {
 		if D_31BE == cursor_rate {
-			D_6E77--
-			if D_6E77 != 0 {
+			if now() < cursorDue {
 				goto C_31CD
 			}
 			D_6E76 = (D_6E76 - 1) & 3
 			Gra_putchar(D_6E76 + 0x1c)
 		}
 		// C_31B9: reload the cursor counter
-		D_6E77 = (1 + cursor_rate) * speed_info
+		cursorDue = now() + time.Duration(1+cursor_rate)*cursorPass
 		D_31BE = cursor_rate
 	}
 C_31CD:
-	cpu(getTimeCycles)
+	host.Yield()
 	if si != dosSeconds() {
 		goto C_317D
 	}
@@ -110,10 +108,7 @@ func u_rand_b() uint8 {
 // t_callback when there is none.
 func u_kbhit() int {
 	u_rand_a()
-	f := uint32(Party[0]) | uint32(Party[1])<<8 | uint32(Party[2])<<16 | uint32(Party[3])<<24
-	f++
-	Party[0], Party[1], Party[2], Party[3] = byte(f), byte(f>>8), byte(f>>16), byte(f>>24)
-	cpu(kbhitCycles)
+	Party.f_000++
 	if len(host.KeyQueue) > 0 {
 		k := host.KeyQueue[0]
 		if k != 0x2E03 && k != 0 {

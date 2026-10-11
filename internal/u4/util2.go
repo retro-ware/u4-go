@@ -1,7 +1,7 @@
 package u4
 
 // Port of UTIL2.ASM (keyboard, delays with the blinking cursor, the random generators) and
-// LOW.ASM (start-up and the speed calibration).
+// LOW.ASM (start-up; the speed calibration is host.SpeedInfo).
 
 import (
 	"time"
@@ -9,17 +9,10 @@ import (
 	"github.com/memmaker/u4-go/internal/host"
 )
 
-// SpeedInfo is the speed_info LOW.ASM measured: the machine's speed in units of 1000 loops
-// per timer tick (55 ms). The game multiplies it into its CPU-timed loops and divides its
-// per-frame animations by it. The port runs t_callback (one redraw of the view, the unit the
-// game's animations count in) at a fixed rate, CallbackTicks host ticks each, and picks the
-// speed that makes the moons and the animations run at the original pace: a 4.77 MHz PC
-// measured 1 and redrew about 5 times a second; the moon cycle shows the rate grows as
-// speed_info/2+1.
-var (
-	SpeedInfo     = 10
-	CallbackTicks = 2 // 70/2 = 35 redraws a second, 5.3*(10/2+1) as on a machine of speed 10
-)
+// CallbackTicks is the host ticks one t_callback (one redraw of the view, the unit the
+// game's animations count in) takes: 35 redraws a second, what a 386 (host.SpeedInfo 12)
+// managed; the moon cycle shows the rate grows as speed_info/2+1 from 5.3 on a 4.77 MHz PC.
+const CallbackTicks = 2
 
 var (
 	cursor_rate uint16 /*D_0672*/
@@ -70,7 +63,6 @@ func u_delay(bp04, bp06 int) { /*C_16CD*/
 				D_0674 = cursor_rate
 			}
 		}
-		host.Busy()
 		if dosSeconds() == si {
 			break
 		}
@@ -135,7 +127,6 @@ func u_kbhit() int {
 		host.KeyQueue = host.KeyQueue[1:]
 	}
 	t_callback()
-	host.Busy()
 	return 0
 }
 
@@ -159,10 +150,6 @@ func u_kbflush() {
 
 // ---- LOW.ASM ----
 
-// psp holds the command line: _80[0] the length, _80[2] the graphics letter, _80[4] the
-// drive digit ULTIMA.COM got from TITLE.EXE.
-var psp [0x100]byte
-
 func low_init() { /*C_0012*/
 	t := time.Now()
 	dx := uint16(t.Second())<<8 | uint16(t.Nanosecond()/10000000)
@@ -178,10 +165,7 @@ func low_init() { /*C_0012*/
 	put(6, cx)
 	put(12, dx)
 	put(14, cx)
-	speed_info = uint16(SpeedInfo)
-	if speed_info == 0 {
-		speed_info = 1
-	}
+	speed_info = host.SpeedInfo
 }
 
 func low_clean() {} /*C_0115*/

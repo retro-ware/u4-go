@@ -14,22 +14,16 @@ var D_1738 = [16]string{
 
 // load castle/towne/village files
 func C_3E30(bp04 int) {
-	if Save("OUTMONST.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-		exit(3)
-	}
-	if Load(D_0824[bp04-0x01], sizeof(&D_8742), &D_8742) == -1 {
-		exit(3)
-	}
-	File_TLK = dopen(D_1738[Party._loc-1], 0)
+	Save("OUTMONST.SAV", &D_8742._npc)
+	LoadRec(D_0824[bp04-0x01], &D_8742)
+	File_TLK = readFile(D_1738[Party._loc-1])
 	CurMode = MOD_BUILDING
 }
 
 // load dungeon files
 func C_3E94() {
-	if Load(D_0894[Party._loc-0x11], 0x200, &D_8742._map) == -1 {
-		exit(3)
-	}
-	File_DNG = dopen(D_0894[Party._loc-0x11], 0)
+	Load(D_0894[Party._loc-0x11], D_8742._map[:0x200])
+	File_DNG = readFile(D_0894[Party._loc-0x11])
 	D_8742._npc._tile = [32]uint8{}
 }
 
@@ -52,9 +46,7 @@ func C_3F03() {
 	}
 	Party._x = 1
 	Party._y = 1
-	if Save("OUTMONST.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-		exit(3)
-	}
+	Save("OUTMONST.SAV", &D_8742._npc)
 	C_3EE4()
 }
 
@@ -346,9 +338,7 @@ func CMD_Klimb() { /*C_4477*/
 			return
 		}
 		u4_puts("to second floor!\n")
-		if Load("LCB_2.ULT", sizeof(&D_8742), &D_8742) == -1 {
-			exit(3)
-		}
+		LoadRec("LCB_2.ULT", &D_8742)
 	} else {
 		w_What()
 	}
@@ -396,7 +386,5 @@ func CMD_Descend() { /*C_44EE*/
 		return
 	}
 	u4_puts("to first floor!\n")
-	if Load("LCB_1.ULT", sizeof(&D_8742), &D_8742) == -1 {
-		exit(3)
-	}
+	LoadRec("LCB_1.ULT", &D_8742)
 }

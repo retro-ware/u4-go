@@ -3,6 +3,12 @@ package u4
 // Port of U4_3D.C: the dungeon's first person view, drawn as wire frames with the driver's
 // Gra_18 quads and lines, and the monsters' sprites scaled by distance.
 
+import (
+	"time"
+
+	"github.com/memmaker/u4-go/internal/host"
+)
+
 var Wall_x0 = [6]uint8{0x08, 0x28, 0x48, 0x58, 0x5F, 0x00} /*D_2D74*/
 var Wall_x1 = [6]uint8{0xB7, 0x97, 0x77, 0x67, 0x60, 0x00} /*D_2D7A*/
 var Wall_y0 = [6]uint8{0x08, 0x28, 0x48, 0x58, 0x5F, 0x00} /*D_2D80*/
@@ -175,35 +181,33 @@ func C_ABE5(bp04 uint8) bool {
 	return bp04&0x0f != 0
 }
 
-// cpuDelay spends a "while(--long)" loop of n iterations (each about 3 simple ones).
-func cpuDelay(n int) {
-	waitUs(float64(n) * 3 * loopUs())
-}
+// The sprite pause of C_AC23 per STA_E: a calibrated while(--long) of k*speed_info passes
+// (each about 3 delay-loop passes of 55ms/8000), k = 1000, 1200, 2400, 3000.
+var spritePause = [4]time.Duration{20625 * time.Microsecond, 24750 * time.Microsecond, 49500 * time.Microsecond, 61875 * time.Microsecond}
 
 // render sprites?
 func C_AC23(bp04 int) {
 	cursor_rate = 0
-	S := int(speed_info)
 	switch STA_E {
 	case 0:
 		for b := 0; b < 48; b++ {
 			Gra_01(bp04, b/3, b+0x70, 0x14, 2)
 		}
-		cpuDelay(1000 * S)
+
 	case 1:
 		for b := 0; b < 32; b++ {
 			Gra_01(bp04, b>>1, b+0x68, 0x14, 2)
 		}
-		cpuDelay(1200 * S)
+
 	case 2:
 		Gra_02(1, 1, bp04, 0x60, 0x16)
-		cpuDelay(2400 * S)
+
 	case 3:
 		for b := 0; b < 8; b++ {
 			Gra_01(bp04, b<<1, b+0x60, 0x16, 1)
 		}
-		cpuDelay(3000 * S)
 	}
+	host.Wait(spritePause[STA_E&3])
 }
 
 func C_AD6A(bp06 uint8, bp04 int) bool {

@@ -224,8 +224,7 @@ func C_A47F(bp04 *string) {
 func C_A4B4(bp04 int) {
 	var bp_02, bp_04 int
 
-	dlseek(File_TLK, uint32(uint16(int16((int(D_8742._npc._tlkidx[bp04])-1)*0x120))))
-	dread(File_TLK, D_95CE[:], 0x120)
+	copy(D_95CE[:], at(File_TLK, int(uint16(int16((int(D_8742._npc._tlkidx[bp04])-1)*0x120)))))
 	bp_04 = int(Party.f_1d8)
 	D_9452 = D_8742._npc._tile[bp04]
 	C_A443(D_95CE[3:])

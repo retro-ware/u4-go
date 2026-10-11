@@ -36,9 +36,7 @@ func CMD_HoleUp() { /*C_8AB0*/
 	if CurMode == MOD_DUNGEON {
 		name = "CAMP.DNG"
 	}
-	if Load(name, sizeof(&Combat), &Combat) == -1 {
-		exit(3)
-	}
+	LoadRec(name, &Combat)
 	// the loop clears 32 bytes from Fighters._tile: _tile and _gtile
 	Fighters._tile = [16]uint8{}
 	Fighters._gtile = [16]uint8{}
@@ -93,23 +91,15 @@ func CMD_Quit() { /*C_6F29*/
 			return
 		}
 	}
-	if Save("PARTY.SAV", sizeof(&Party), &Party) == -1 {
-		exit(3)
-	}
+	Save("PARTY.SAV", &Party)
 	if Party._loc == 0 {
-		if Save("MONSTERS.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-			exit(3)
-		}
+		Save("MONSTERS.SAV", &D_8742._npc)
 	}
 	if Party._loc < 0x11 || Party._loc > 0x18 {
 		return
 	}
-	if Save("MONSTERS.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-		exit(3)
-	}
-	if Save("DNGMAP.SAV", 0x200, &D_8742._map) == -1 {
-		exit(3)
-	}
+	Save("MONSTERS.SAV", &D_8742._npc)
+	SaveBytes("DNGMAP.SAV", D_8742._map[:0x200])
 }
 
 const D_21F4 = ", You must lead!\n"

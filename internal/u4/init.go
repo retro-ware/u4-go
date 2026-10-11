@@ -1,28 +1,21 @@
 package u4
 
-// Port of U4_INIT.C: start-up, reading the command line ULTIMA.COM passed and the graphics
-// and save files. The port only has the EGA driver, so the adapter is always EGA.
+// Port of U4_INIT.C: start-up, reading the graphics and save files. The port only has the EGA driver, so the adapter is always EGA.
 
 func C_C51C() {
 	// set drive number: dropped, the port has no drives or disks
 	// set graphic type: EGA only
 	D_943A = 2
-	pShapes = dalloc(0x8000)
-	pCharset = dalloc(0x1000)
-	if Load("CHARSET.EGA", 0x1000, pCharset) == -1 {
-		exit(3)
-	}
+	pShapes = make([]byte, 0x8000)
+	pCharset = make([]byte, 0x1000)
+	Load("CHARSET.EGA", pCharset)
 	C_20C1("EGA.DRV")
 	Gra_init()
-	sizzleCharset()
+	drv.SetGlyphs(pCharset)
 	Gra_clrscr()
-	if Load("SHAPES.EGA", 0x8000, pShapes) == -1 {
-		exit(3)
-	}
-	sizzleShapes()
-	if Load("PARTY.SAV", sizeof(&Party), &Party) == -1 {
-		exit(3)
-	}
+	Load("SHAPES.EGA", pShapes)
+	drv.SetTiles(pShapes)
+	LoadRec("PARTY.SAV", &Party)
 	if Party.f_1d8 == 0 {
 		Gra_clrscr()
 		txt_Y = 8
@@ -32,16 +25,13 @@ func C_C51C() {
 		u_delay(3, 0)
 		u_kbflush()
 		low_clean()
-		exit(4)
+		backToTitle()
 	}
-	if Load("MONSTERS.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-		exit(3)
+	LoadRec("MONSTERS.SAV", &D_8742._npc)
+	if File_MAP = readFile("WORLD.MAP"); len(File_MAP) < 64*0x400 {
+		fatalf("WORLD.MAP: file wrong size")
 	}
-	if File_MAP = dopen("WORLD.MAP", 0); File_MAP == -1 {
-		Console("Can't open map file\r\n")
-		exit(3)
-	}
-	File_TLK = 0
+	File_TLK = nil
 	D_9445 = D_0814[Party._trammel]
 	D_9448 = D_081C[Party._felucca]
 	C_213B() // draw game screen frame

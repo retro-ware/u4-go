@@ -17,18 +17,15 @@ func init() {
 }
 
 // present shows the screen: DOS drew to video memory directly, the port lets Ebiten draw
-// what the driver left in its planes at the next tick.
+// what the driver left in the framebuffer at the next tick.
 func present() { host.Yield() }
 
 // resetGlobals puts in place what DOS gave a freshly loaded AVATAR.EXE: the EGA driver
 // (Gra_init only sets it up) shown as the host's frame.
 func resetGlobals() {
-	drv = ega.New()
+	drv = ega.New(frame.Pix)
 	drv.ReadFile = readGameFile
 	drv.Present = present
 	drv.Speaker = func(bool) {} // ponytail: shake clicks silent; route to internal/speaker if missed
-	host.ShowFrame = func() *host.Frame {
-		drv.Pixels(frame.Pix)
-		return &frame
-	}
+	host.ShowFrame = func() *host.Frame { return &frame }
 }

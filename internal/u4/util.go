@@ -313,23 +313,15 @@ func C_0EB1() {
 	Party.out_x = 0x56
 	Party.out_y = 0x6c
 
-	if File_TLK != 0 {
-		dclose(File_TLK)
-		File_TLK = 0
-	}
-	if File_DNG != 0 {
-		dclose(File_DNG)
-		File_TLK = 0 /*bug??*/
+	File_TLK = nil
+	if File_DNG != nil {
+		File_TLK = nil /*bug??: the C closed File_DNG but left its handle set*/
 	}
 	if Party._loc == 0 {
-		if Save("OUTMONST.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-			exit(3)
-		}
+		Save("OUTMONST.SAV", &D_8742._npc)
 	}
-	if Load("LCB_2.ULT", sizeof(&D_8742), &D_8742) == -1 {
-		exit(3)
-	}
-	File_TLK = dopen("LCB.TLK", 0)
+	LoadRec("LCB_2.ULT", &D_8742)
+	File_TLK = readFile("LCB.TLK")
 	CurMode = MOD_BUILDING
 	Party._loc = 0x01
 	Party.f_1dc = 0

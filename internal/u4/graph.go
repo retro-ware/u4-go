@@ -1,21 +1,18 @@
 package u4
 
-// Port of U4_GRAPH.ASM: loading the graphics driver, the screen frame, Gra_line, the
-// thunks into the driver (here: the ega package) and the sizzle routines that turn the
-// packed EGA tiles and font into the driver's planar layout.
+// Port of U4_GRAPH.ASM: loading the graphics driver, the screen frame, Gra_line and the
+// thunks into the driver (here: the ega package, plain pixel code).
 
 import "github.com/memmaker/u4-go/internal/ega"
 
 // drv is the loaded EGA.DRV.
 var drv *ega.Driver
 
-var sizzleBuff [0x80]byte
-
 // load graphic lib: the port has the EGA driver built in; the file must still be there,
 // as the original exits (code 49h) without it.
 func C_20C1(name string) {
 	if _, ok := readGameFile(name); !ok {
-		exit(0x49)
+		fatalf("can't open %s", name)
 	}
 }
 
@@ -122,51 +119,5 @@ func Gra_19() {
 }
 
 func Gra_init() {
-	drv.Init(pShapes, pCharset, exit)
-}
-
-// sizzleShapes turns the 256 packed tiles (16x16, two pixels a byte) into the driver's
-// planar layout, in place (C_22CF).
-func sizzleShapes() {
-	b := pShapes
-	for t := 0; t < 0x100; t++ {
-		sizzle(b[t*0x80:t*0x80+0x80], 0x10, 8, 2, 0x20)
-	}
-}
-
-// sizzleCharset does the same for the 128 characters (8x8) (C_2341).
-func sizzleCharset() {
-	b := pCharset
-	for c := 0; c < 0x80; c++ {
-		sizzle(b[c*0x20:c*0x20+0x20], 8, 4, 1, 8)
-	}
-}
-
-// sizzle converts one packed glyph (rows of bpr bytes, high nibble first) to four planes
-// of rows*w bytes each (plane 3 first): bit 3 of each pixel goes to plane region 0.
-func sizzle(g []byte, rows, bpr, w, plane int) {
-	clear(sizzleBuff[:])
-	si := 0
-	for r := 0; r < rows; r++ {
-		bx := r * w
-		for i := 0; i < bpr; i++ {
-			al := g[si]
-			si++
-			for pix := 0; pix < 2; pix++ {
-				for p := 0; p < 4; p++ {
-					bit := al >> 7 & 1
-					al <<= 1
-					if w == 2 { // rcl [bx+1] then rcl [bx]: a 16-bit shift
-						v := uint16(sizzleBuff[bx+p*plane])<<8 | uint16(sizzleBuff[bx+p*plane+1])
-						v = v<<1 | uint16(bit)
-						sizzleBuff[bx+p*plane] = byte(v >> 8)
-						sizzleBuff[bx+p*plane+1] = byte(v)
-					} else {
-						sizzleBuff[bx+p*plane] = sizzleBuff[bx+p*plane]<<1 | bit
-					}
-				}
-			}
-		}
-	}
-	copy(g, sizzleBuff[:len(g)])
+	drv.Init(driverExit)
 }

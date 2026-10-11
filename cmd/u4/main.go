@@ -80,24 +80,22 @@ func main() {
 	u4.GameDir, u4.SaveDir = *game, *save
 
 	speaker.Start()
-	code := 0
+	var gameErr error
 	err := host.Run("Ultima IV", *scale, func() {
-		// ULTIMA.COM: TITLE.EXE's exit code becomes AVATAR.EXE's second argument; AVATAR
-		// exiting with 4 goes back to the title.
-		n, p0, p1 := byte(0), byte(' '), byte(' ')
-		for {
-			c := title.Main(*game, *save, n, p0, p1)
-			n, p1 = 4, byte(c)
-			if code = u4.Main(p0, p1); code != 4 {
-				return
+		// The title, then the game, which comes back to the title when no party is formed.
+		for gameErr == nil {
+			if gameErr = title.Main(*game, *save); gameErr == nil {
+				gameErr = u4.Main()
 			}
 		}
 	})
+	if err == nil {
+		err = gameErr
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	host.Exit(code)
 }
 
 func hasAll(files map[string][]byte, names ...string) bool {

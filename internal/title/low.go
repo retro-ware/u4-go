@@ -10,17 +10,7 @@ import (
 	"github.com/memmaker/u4-go/internal/host"
 )
 
-// SpeedInfo is what LOW.ASM's calibration loop measures: thousands of loop passes per 55 ms
-// timer tick, about 1 on a 4.77 MHz PC. TITLE.EXE multiplies it into its delay loops and
-// draws the view speed_info/2 extra times a frame; the port's cycle model (cpu) divides the
-// cost of the work by it, so the pacing stays close to the original at any value. 10 matches
-// AVATAR.EXE's port.
-var SpeedInfo = 10
-
-var (
-	speed_info uint16      /*D_692E*/
-	psp        [0x100]byte // far_psp (D_041C): the command line at 80h
-)
+var speed_info uint16 /*D_692E*/
 
 func low_init() { /*C_244E*/
 	t := time.Now()
@@ -37,28 +27,26 @@ func low_init() { /*C_244E*/
 	put(6, cx)
 	put(12, dx)
 	put(14, cx)
-	speed_info = uint16(SpeedInfo)
-	if speed_info == 0 {
-		speed_info = 1
-	}
+	speed_info = host.SpeedInfo
 }
 
 func low_clean() {} /*C_2551: video mode, Tandy memory, int 24h: nothing to restore*/
 
 func low_gra() int16 { return 2 } /*C_2583: EGA*/
 
-// ---- the cycle model ----
+// ---- pacing ----
 
-// cpu lets the time pass that the given 4.77 MHz-PC cycles of work took on a machine of
-// speed speed_info. DOS drew straight to video memory; here the host shows the planes at
-// each yield, so pacing the work is also what shows it.
-func cpu(cycles int) {
-	cpuCarry += float64(cycles) / (4.77 * float64(speed_info))
-	tick := 1e6 / float64(host.TPS)
-	for cpuCarry >= tick {
-		cpuCarry -= tick
-		host.Yield()
-	}
-}
+// Real-time lengths of the intro's steps. The calibrated waits (C_02A3, u_delay's cursor and
+// monsters) last the same on any machine; the uncalibrated work (drawing, the moongate's empty
+// loop) is timed as it ran on the era's 386 (host.SpeedInfo).
+const (
+	delayPass    = 8400 * time.Nanosecond // one pass of C_02A3's calibrated loop: 440 = a handwriting dot
+	monsterFrame = 120 * time.Millisecond // t_callback: the two monsters move every 200 u_delay passes
+	cursorPass   = 600 * time.Microsecond // the cursor turns every (1+cursor_rate) u_delay passes
+	viewStep     = 20 * time.Millisecond  // one move of the view: 1+speed_info/2 redraws
+	scrollStep   = 12 * time.Millisecond  // one step of the view's scroll-open (C_02A3 adds its own)
+	dissolveStep = 10 * time.Millisecond  // one step of the "Ultima IV" dissolve (two Gra_B)
+	moongateStep = 5 * time.Millisecond   // one frame of the moongate: 10000 passes of an empty loop
+)
 
-var cpuCarry float64 // microseconds owed
+func pace(d time.Duration) { host.Wait(d) }

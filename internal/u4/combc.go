@@ -99,9 +99,7 @@ func C_7C65() {
 			}
 		}
 	}
-	if Load(D_2512[si], sizeof(&Combat), &Combat) == -1 {
-		exit(3)
-	}
+	LoadRec(D_2512[si], &Combat)
 }
 
 var D_256E = [16]int{0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 5, 0, 6, 0}
@@ -110,18 +108,14 @@ var D_258E = [7]string{"DNG0.CON", "DNG1.CON", "DNG2.CON", "DNG3.CON", "DNG4.CON
 
 // load dungeon CON file
 func C_7D50() {
-	if Load(D_258E[D_256E[tile_cur>>4]], sizeof(&Combat), &Combat) == -1 {
-		exit(3)
-	}
+	LoadRec(D_258E[D_256E[tile_cur>>4]], &Combat)
 	C_7FD7()
 	D_9446 = 1 // force 3d render
 }
 
 // load inn CON file
 func C_7D92() {
-	if Load("INN.CON", sizeof(&Combat), &Combat) == -1 {
-		exit(3)
-	}
+	LoadRec("INN.CON", &Combat)
 	C_7FD7()
 }
 
@@ -237,14 +231,13 @@ func C_7FFD() {
 	var loc_A [0x100]uint8
 	var loc_B, loc_C int
 
-	ofs := uint16(sizeof(tMap8x8x8{}))
+	ofs := uint16(8 * 8 * 8) // past the level maps
 	if Party._loc == 0x18 {
 		ofs += uint16(int(Party._z>>1)*0x1000) + uint16(tile_cur&0xf)*0x100
 	} else {
 		ofs += uint16(tile_cur&0xf) * 0x100
 	}
-	dlseek(File_DNG, uint32(ofs))
-	dread(File_DNG, &loc_A, 0x100)
+	copy(loc_A[:], at(File_DNG, int(ofs)))
 	D_95CC = MOD_DUNGEON
 	CurMode = MOD_COM_ROOM
 	copy(D_95B2[:], loc_A[:16])
@@ -424,8 +417,7 @@ func C_837A() {
 			Party.out_y = D_0864[Party._loc-1]
 			u4_puts("into Dungeon\n")
 			u4_puts(D_1E98[127+int(Party._loc)-1])
-			dclose(File_DNG)
-			File_DNG = 0
+			File_DNG = nil
 			C_3E94()
 		}
 		Gra_CR()

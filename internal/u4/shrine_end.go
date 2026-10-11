@@ -106,9 +106,7 @@ func C_E72C() {
 		leave()
 		return
 	}
-	if Load("SHRINE.CON", 11*11, Combat._map[:]) == -1 {
-		exit(3)
-	}
+	Load("SHRINE.CON", Combat._map[:])
 	CurMode = MOD_SHRINE
 	u4_puts("\nYou enter the ancient shrine and sit before the altar...\nUpon what virtue dost thou meditate?\n")
 	u4_gets(loc_D[:], 15)

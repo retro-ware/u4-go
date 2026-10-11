@@ -280,8 +280,7 @@ func DNG_main() { /*C_84D2*/
 		}
 	}
 	C_2747()
-	dclose(File_DNG)
-	File_DNG = 0
+	File_DNG = nil
 }
 
 func C_8743() bool {

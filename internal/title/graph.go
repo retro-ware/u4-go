@@ -1,30 +1,27 @@
 package title
 
 // Port of GRAPH.ASM, EGA entries only (the CGA and Tandy routines of the dispatch table D_03CE
-// are dropped): tile maps (Gra_0 to the screen, Gra_C into a picture buffer), dots, the
-// window clears, picture copies (Gra_3) and the dissolve (Gra_B), the picture loader
-// (Gra_inflate), the tile/flag animations, characters, and the sizzle routines that turn the
-// packed tiles and font into planar data.
+// are dropped): tile maps (Gra_0 to the screen, Gra_C into a picture), dots, the window
+// clears, picture copies (Gra_3) and the dissolve (Gra_B), the picture loader (Gra_inflate),
+// the tile/flag animations and characters.
 //
-// The screen is an ega.Driver's four planes (mode 0Dh, 40 bytes a row). Picture buffers hold
-// four 8000-byte planes, plane 3 first (offsets 0, 1F40h, 3E80h, 5DC0h). After GR_INIT_EGA
-// the Lines table is row*40; lines() computes it.
+// The screen is an ega.Driver's 320x200 framebuffer of colour indexes; pictures are the same
+// (picSize bytes, one a pixel). x positions and widths the game passes are in 8-pixel
+// columns, as on the EGA.
 
-import (
-	"github.com/memmaker/u4-go/internal/ega"
-	"github.com/memmaker/u4-go/internal/speaker"
-)
+import "github.com/memmaker/u4-go/internal/ega"
 
 var drv *ega.Driver
 
 var (
-	D_03CC     uint8       = 0x35 // Gra_B's random state
-	D_03CD     uint8       = 0x9b
-	D_3A86     [0x10]uint8 // C_208A's random seed (only 4 bytes used; _BSS, so zero)
-	sizzleBuff [0x80]uint8
-	D_3B16     uint16 // inflated file buffer offset
-	D_3B1C     uint8  // pixel mask (a word in the original; the low byte is used)
+	D_03CC uint8       = 0x35 // Gra_B's random state
+	D_03CD uint8       = 0x9b
+	D_3A86 [0x10]uint8 // C_208A's random seed (only 4 bytes used; _BSS, so zero)
+	D_3B16 uint16      // inflated file buffer offset (Gra_inflate: the pixel)
 )
+
+// picSize is a picture buffer's size: one byte a pixel.
+const picSize = ega.W * ega.H
 
 // D_32D0: Gra_B's dissolve masks (the low byte of each word is used), by density 0..63.
 var D_32D0 = [64]uint16{
@@ -38,160 +35,86 @@ var D_32D0 = [64]uint16{
 	0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
 }
 
-// D_337A: Gra_dot's colour to plane mask; 4 and 5 read on into GR_SEGMENT (A000h after init).
+// D_337A: Gra_dot's colour to colour bits; 4 and 5 read on into GR_SEGMENT (A000h after init).
 var D_337A = [...]uint8{0x00, 0x02, 0x04, 0x0B, 0x00, 0xA0}
 
-// Cycle model costs (calibration knobs): a tile (64 word copies), a byte of a picture copy,
-// a row's set-up, Gra_B's work per byte.
-const (
-	tileCycles   = 1900
-	byteCycles   = 9
-	rowCycles    = 60
-	bEmptyCycles = 40
-	bByteCycles  = 220
-)
-
-const planeSize = 0x1f40
-
-func lines(row int) int { return (row * 40) & 0xffff }
-
-func rd(b []byte, off int) byte {
-	if off < 0 || off >= len(b) {
+func rd(b []byte, i int) byte {
+	if i < 0 || i >= len(b) {
 		return 0
 	}
-	return b[off]
+	return b[i]
 }
 
-// wr stores into a picture buffer; past its 8000h bytes the original wrote over whatever
-// followed in the far heap, the port drops the byte.
-func wr(b []byte, off int, v byte) {
-	if off >= 0 && off < len(b) {
-		b[off] = v
+func wr(b []byte, i int, v byte) {
+	if i >= 0 && i < len(b) {
+		b[i] = v
 	}
 }
 
-// scr is video memory, plane p, offset off (16-bit).
-func scr(p, off int) *byte { return &drv.Planes[p][off&0xffff] }
+// Gra_0 (GR_0_EGA) draws an h x w map of tiles (16x16) at pixel row `row`, from x 8. The
+// other arguments are the CGA/Tandy routines'.
+func Gra_0(h, w int, m []uint8, row, _, _, _ int) { Gra_C(h, w, m, row, drv.Pix, 0) }
 
-// Gra_0 (GR_0_EGA) draws an h x w map of tiles (16x16) at pixel row `row`, from
-// byte 1 (x 8). The other arguments are the CGA/Tandy routines'.
-func Gra_0(h, w int, m []uint8, row, _, _, _ int) {
-	k := 0
-	n := h * w
-	for bx := row; h > 0; h-- {
-		di := lines(bx) + 1
-		for c := 0; c < w; c++ {
-			si := int(m[k]) << 7
-			k++
-			for p := 3; p >= 0; p-- {
-				for r := 0; r < 16; r++ {
-					*scr(p, di+r*40) = rd(pShapes, si)
-					*scr(p, di+r*40+1) = rd(pShapes, si+1)
-					si += 2
-				}
-			}
-			di += 2
-		}
-		bx += 16
-	}
-	cpu(n * tileCycles)
-}
-
-// Gra_C (GR_C_EGA) is Gra_0 into the picture buffer pic.
+// Gra_C (GR_C_EGA) is Gra_0 into the picture pic.
 func Gra_C(h, w int, m []uint8, row int, pic []byte, _ int) {
-	k := 0
-	n := h * w
-	for bx := row; h > 0; h-- {
-		di := lines(bx) + 1
-		for c := 0; c < w; c++ {
-			si := int(m[k]) << 7
-			k++
-			for p := 0; p < 4; p++ {
-				for r := 0; r < 16; r++ {
-					wr(pic, di+r*40, rd(pShapes, si))
-					wr(pic, di+r*40+1, rd(pShapes, si+1))
-					si += 2
+	for r, k := 0, 0; r < h; r++ {
+		for c := 0; c < w; c, k = c+1, k+1 {
+			g := &drv.Tiles[m[k]]
+			x, y := 8+c*16, row+r*16
+			for ty := 0; ty < 16; ty++ {
+				for tx := 0; tx < 16; tx++ {
+					wr(pic, (y+ty)*ega.W+x+tx, g[ty*16+tx])
 				}
-				di += planeSize
 			}
-			di = (di - 0x7d00 + 2) & 0xffff
 		}
-		bx += 16
 	}
-	cpu(n * tileCycles)
 }
 
 // Gra_dot (GR_DOT_EGA) ORs a pixel of colour col (0..3) at (x, y).
 func Gra_dot(y, x, col int) {
-	bm := byte(0x80) >> (x & 7)
-	off := lines(y&0xffff) + (x&0xffff)>>3
-	mask := D_337A[col]
-	for p := 0; p < 4; p++ {
-		if mask&(1<<p) != 0 {
-			*scr(p, off) |= bm
-		}
+	i := (y&0xffff)*ega.W + x&0xffff
+	wr(drv.Pix, i, rd(drv.Pix, i)|D_337A[col]&0xf)
+}
+
+func clearRows(y0, y1, x, w int) {
+	for r := y0; r < y1; r++ {
+		clear(drv.Pix[r*ega.W+x : r*ega.W+x+w])
 	}
 }
 
 // Gra_2 (GR_2_EGA) clears the view/menu area: rows 104..183, x 8..311.
-func Gra_2() {
-	for r := 104; r < 184; r++ {
-		for i := 1; i <= 38; i++ {
-			for p := 0; p < 4; p++ {
-				*scr(p, lines(r)+i) = 0
-			}
-		}
-	}
-}
+func Gra_2() { clearRows(104, 184, 8, 304) }
 
 // Gra_5 (GR_5_EGA) clears the text area: rows 152..199.
-func Gra_5() {
-	for r := 152; r < 200; r++ {
-		for i := 0; i < 40; i++ {
-			for p := 0; p < 4; p++ {
-				*scr(p, lines(r)+i) = 0
-			}
-		}
-	}
-}
+func Gra_5() { clearRows(152, 200, 0, ega.W) }
 
-// Gra_3 (GR_3_EGA) copies a w (bytes) x h block of picture pic from (src_x, src_y) to the
+// Gra_3 (GR_3_EGA) copies a w (columns) x h block of picture pic from (src_x, src_y) to the
 // screen at (dst_x, dst_y). rand_pts is the CGA routine's.
 func Gra_3(w, h, src_x, src_y int, pic []byte, dst_y, rand_pts, dst_x int) {
-	for p, po := 3, 0; p >= 0; p, po = p-1, po+planeSize {
-		for i := 0; i < h; i++ {
-			di := dst_x + lines(dst_y+i)
-			si := lines(src_y+i) + src_x + po
-			for c := 0; c < w; c++ {
-				*scr(p, di+c) = rd(pic, (si+c)&0xffff)
-			}
+	for i := 0; i < h; i++ {
+		di := (dst_y+i)*ega.W + dst_x*8
+		si := (src_y+i)*ega.W + src_x*8
+		for c := 0; c < w*8; c++ {
+			wr(drv.Pix, di+c, rd(pic, si+c))
 		}
 	}
-	cpu(4 * h * (w*byteCycles + rowCycles))
 }
 
 // Gra_B (GR_B_EGA) is Gra_3 through a random mask of density rand_pts..rand_pts+7 (of 63),
-// bottom row first, skipping bytes blank in the picture; it clicks the speaker when its
-// generator overflows past rand_pts (more often as the picture fills in).
+// bottom row first, skipping 8-pixel columns blank in the picture; it clicks the speaker
+// when its generator overflows past rand_pts (more often as the picture fills in).
 func Gra_B(w, h, src_x, src_y int, pic []byte, dst_y, rand_pts, dst_x int) {
-	var segs []speaker.Seg
-	on := false // port 61h bit 1 (the original restores the port at the end)
-	us, cycles := 0.0, 0
-	cost := func(c int) {
-		cycles += c
-		us += float64(c) / (4.77 * float64(speed_info))
-	}
 	for ; h != 0; h-- {
-		di := lines(dst_y+h-1) + dst_x
-		si := lines(src_y+h-1) + src_x
-		cost(rowCycles)
-		for c := 0; c < w; c, si, di = c+1, si+1, di+1 {
-			al := rd(pic, si) | rd(pic, si+planeSize) | rd(pic, si+2*planeSize) | rd(pic, si+3*planeSize)
+		di := (dst_y+h-1)*ega.W + dst_x*8
+		si := (src_y+h-1)*ega.W + src_x*8
+		for c := 0; c < w; c, si, di = c+1, si+8, di+8 {
+			var al byte
+			for k := 0; k < 8; k++ {
+				al |= rd(pic, si+k)
+			}
 			if al == 0 {
-				cost(bEmptyCycles)
 				continue
 			}
-			cost(bByteCycles)
 			s := uint16(D_03CC) + 0x1d
 			dl := uint8(s)
 			dh := dl
@@ -199,77 +122,52 @@ func Gra_B(w, h, src_x, src_y int, pic []byte, dst_y, rand_pts, dst_x int) {
 			D_03CC, D_03CD = dl, dh
 			dh = dl & 7
 			if uint16(dl)+uint16(uint8(rand_pts)) > 0xff {
-				segs = append(segs, speaker.Seg{On: on, Us: us})
-				on, us = !on, 0
+				dissolveClicks++
 			}
 			m := uint8(D_32D0[uint8(rand_pts)+dh])
-			*scr(3, di) = rd(pic, si) & m
-			*scr(2, di) = rd(pic, si+planeSize) & m
-			*scr(1, di) = rd(pic, si+2*planeSize) & m
-			*scr(0, di) = rd(pic, si+3*planeSize) & m
+			for k := 0; k < 8; k++ {
+				var v byte
+				if m&(0x80>>k) != 0 {
+					v = rd(pic, si+k)
+				}
+				wr(drv.Pix, di+k, v)
+			}
 		}
 	}
-	segs = append(segs, speaker.Seg{On: on, Us: us})
-	speaker.Play(segs)
-	cpu(cycles)
 }
 
 // Gra_inflate (GR_INFLATE_EGA) decodes picture file name into pic (cleared first): each byte
-// is two pixels, spread over the four planes.
+// is two pixels, high nibble first.
 func Gra_inflate(name string, pic []byte) {
-	D_3B1C = 0x80
 	D_3B16 = 0
-	clear(pic[:min(len(pic), 0x7d00)])
+	clear(pic)
 	CB_ega := func(al uint8) { /*C_199E*/
-		di := int(D_3B16)
-		ah := D_3B1C
-		for half := 0; half < 2; half++ {
-			for po := 0; po < 4*planeSize; po += planeSize {
-				if al&0x80 != 0 {
-					wr(pic, (di+po)&0xffff, rd(pic, (di+po)&0xffff)|ah)
-				}
-				al <<= 1
-			}
-			ah >>= 1
-		}
-		cf := D_3B1C&2 != 0
-		D_3B1C = D_3B1C>>2 | D_3B1C<<6
-		if cf {
-			D_3B16++
-		}
+		wr(pic, int(D_3B16), al>>4)
+		wr(pic, int(D_3B16)+1, al&0xf)
+		D_3B16 += 2
 	}
 	if C_23C3(name, CB_ega) == -1 {
-		exit(0x36)
+		fatalf("can't read %s", name)
 	}
 }
 
-// Gra_init (GR_INIT_EGA): mode 0Dh (video memory cleared), the palette (D_3369, the EGA
-// default: ega.Palette), the Lines table, then the planar font and tiles.
+// Gra_init (GR_INIT_EGA): mode 0Dh (screen cleared), the palette (the EGA default:
+// ega.Palette), then the font and tiles decoded to pixels.
 func Gra_init() {
-	for p := range drv.Planes {
-		clear(drv.Planes[p])
-	}
-	sizzleCharset()
-	sizzleShapes()
+	drv.ClrScr()
+	drv.SetGlyphs(pCharset)
+	drv.SetTiles(pShapes)
 }
 
-func Gra_animFlow(tile int) { /*GR_ANIMFLOW_EGA: same as EGA.DRV's*/
-	drv.Shapes = pShapes
-	drv.AnimFlow(tile)
-}
+func Gra_animFlow(tile int) { drv.AnimFlow(tile) } /*GR_ANIMFLOW_EGA: same as EGA.DRV's*/
 
-// Gra_animFlag (GR_ANIMFLAG_EGA) swaps the flag tiles' word pairs, each when C_208A comes
-// out non-negative. TITLE.EXE's seed is zero (_BSS) and the carry going in is clear, so the
-// generator stays at 0 and every flag swaps every time (EGA.DRV seeds 12345678h instead).
+// Gra_animFlag (GR_ANIMFLAG_EGA) waves the flags, each when C_208A comes out non-negative.
+// TITLE.EXE's seed is zero (_BSS) and the carry going in is clear, so the generator stays
+// at 0 and every flag waves every time (EGA.DRV seeds 12345678h instead).
 func Gra_animFlag() {
-	for _, o := range []int{0x506, 0x582, 0x804, 0x904, 0x702} {
-		if int8(C_208A()) < 0 {
-			continue
-		}
-		for p := 0; p < 4; p++ {
-			a := o + p*0x20
-			pShapes[a], pShapes[a+2] = pShapes[a+2], pShapes[a]
-			pShapes[a+1], pShapes[a+3] = pShapes[a+3], pShapes[a+1]
+	for i := 0; i < 5; i++ {
+		if int8(C_208A()) >= 0 {
+			drv.WaveFlag(i)
 		}
 	}
 }
@@ -287,56 +185,9 @@ func C_208A() uint8 {
 	return a
 }
 
-func Gra_putchar(c uint8) { /*GR_PUTCHAR_EGA: same as EGA.DRV's*/
-	drv.Charset = pCharset
-	drv.PutChar(int(txt_Y), int(txt_X), c)
-}
+func Gra_putchar(c uint8) { drv.PutChar(int(txt_Y), int(txt_X), c) } /*GR_PUTCHAR_EGA*/
 
 func Gra_clrscr() { drv.ClrScr() } /*GR_CLRSCR_EGA*/
-
-// sizzleCharset turns the 128 packed characters (8x8, two pixels a byte) into four 8-byte
-// planes each, plane 3 first (C_20B4).
-func sizzleCharset() {
-	for c := 0; c < 0x80; c++ {
-		g := pCharset[c*0x20 : c*0x20+0x20]
-		si := 0
-		for bx := 0; bx < 8; bx++ {
-			for dl := 0; dl < 4; dl++ {
-				al := g[si]
-				si++
-				for k := 0; k < 8; k++ {
-					o := bx + (k&3)*8
-					sizzleBuff[o] = sizzleBuff[o]<<1 | al>>7
-					al <<= 1
-				}
-			}
-		}
-		copy(g, sizzleBuff[:0x20])
-	}
-}
-
-// sizzleShapes does the same for the 256 tiles (16x16): four planes of 16 rows x 2 bytes
-// (C_210C).
-func sizzleShapes() {
-	for t := 0; t < 0x100; t++ {
-		g := pShapes[t*0x80 : t*0x80+0x80]
-		si := 0
-		for bx := 0; bx < 0x20; bx += 2 {
-			for dl := 0; dl < 8; dl++ {
-				al := g[si]
-				si++
-				for k := 0; k < 8; k++ {
-					o := bx + (k&3)*0x20 // rcl [o+1] then rcl [o]: a 16-bit shift, [o] high
-					v := uint16(sizzleBuff[o])<<8 | uint16(sizzleBuff[o+1])
-					v = v<<1 | uint16(al>>7)
-					sizzleBuff[o], sizzleBuff[o+1] = byte(v>>8), byte(v)
-					al <<= 1
-				}
-			}
-		}
-		copy(g, sizzleBuff[:])
-	}
-}
 
 // C_217E decodes file name (SHAPES.EGZ) into buf as is (CB_dummy).
 func C_217E(name string, buf []byte) {
@@ -346,6 +197,6 @@ func C_217E(name string, buf []byte) {
 		D_3B16++
 	}
 	if C_23C3(name, CB_dummy) == -1 {
-		exit(0x36)
+		fatalf("can't read %s", name)
 	}
 }

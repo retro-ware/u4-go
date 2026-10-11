@@ -100,16 +100,12 @@ func C_271D(bp04 string) {
 	u_kbread()
 }
 
-// moongateLoopCycles: one pass of the moongate animations' empty for(int) loop, not scaled
-// by speed_info (so the animation runs faster on faster machines, as it did).
-const moongateLoopCycles = 25
-
 /*moongate animation #1*/
 func C_273E() {
 	for bp_02 := 1; bp_02 <= 23; bp_02++ {
 		Gra_3(3, bp_02, 0, 152, D_6940, 92-bp_02, -1, 9)
 		Gra_3(3, 24-bp_02, 9, 68, D_6940, 68, -1, 9)
-		cpu(10000 * moongateLoopCycles)
+		pace(moongateStep)
 	}
 	Gra_3(3, 24, 0, 152, D_6940, 68, -1, 9)
 }
@@ -119,14 +115,14 @@ func C_27E0() {
 	for bp_02 := 1; bp_02 <= 23; bp_02++ {
 		Gra_3(3, bp_02, 3, 152, D_6940, 68, -1, 9)
 		Gra_3(3, 24-bp_02, 0, 152, D_6940, bp_02+68, -1, 9)
-		cpu(10000 * moongateLoopCycles)
+		pace(moongateStep)
 	}
 	Gra_3(3, 24, 3, 152, D_6940, 68, -1, 9)
 }
 
 // the introduction: texts 1Dh..34h, the pictures changing along the way
 func C_2883() {
-	D_6940 = make([]byte, 0x8000)
+	D_6940 = make([]byte, picSize)
 	bp_02 := 0x1d
 	Gra_inflate("tree.ega", D_6940)
 	Gra_clrscr()
@@ -187,7 +183,7 @@ var D_307E = [...]string{
 
 // draw virtue card bp06 on the left (bp04 0) or the right
 func C_2B6D(bp06, bp04 int) {
-	bp_04 := make([]byte, 0x8000)
+	bp_04 := make([]byte, picSize)
 	Gra_inflate(D_307E[bp06/2], bp_04)
 	sx, dx := 27, 27
 	if bp06&1 == 0 {
@@ -311,42 +307,31 @@ func C_2C12() {
 var D_30DC = [...]uint8{0xE7, 0x53, 0x23, 0x3B, 0x9E, 0x69, 0x17, 0xBA}
 var D_30E4 = [...]uint8{0x88, 0x69, 0xDD, 0x2C, 0x15, 0xB7, 0x81, 0xAB}
 
-// karmas: offsets of Party._hones.._humil (D_30EC)
-var pKarmas = [8]int{party_hones, party_hones + 2, party_hones + 4, party_hones + 6, party_hones + 8, party_hones + 10, party_hones + 12, party_hones + 14}
-
 // prepare the party structure
 func C_2E04() {
-	var loc_B [sizeofChara]byte
-
-	if Load("PARTY.NEW", sizeofParty, Party[:]) == -1 {
-		exit(3)
-	}
-	Party[party_x] = D_30DC[lastVirtue]
-	Party[party_y] = D_30E4[lastVirtue]
-	put16(Party[:], party_f_1d8, 1)
+	LoadRec("PARTY.NEW", &Party)
+	Party.x = D_30DC[lastVirtue]
+	Party.y = D_30E4[lastVirtue]
+	Party.f_1d8 = 1
 	for loc_A := 7; loc_A >= 0; loc_A-- {
-		put16(Party[:], pKarmas[loc_A], uint16(tmp_karma[loc_A]))
+		Party.karmas[loc_A] = uint16(tmp_karma[loc_A])
 	}
-	/*-- swap(&(Party.chara[lastVirtue]), &(Party.chara[0])) --*/
-	cv := Party[party_chara+int(lastVirtue)*sizeofChara:][:sizeofChara]
-	c0 := Party[party_chara:][:sizeofChara]
-	copy(loc_B[:], cv)
-	copy(cv, c0)
-	copy(c0, loc_B[:])
+	Party.chara[lastVirtue], Party.chara[0] = Party.chara[0], Party.chara[lastVirtue]
+	c0 := &Party.chara[0]
 	/*strcpy(Party.chara[0]._name, player_name)*/
 	for i := 0; ; i++ {
-		c0[chara_name+i] = player_name[i]
+		c0.name[i] = player_name[i]
 		if player_name[i] == 0 {
 			break
 		}
 	}
-	put16(c0, chara_str, uint16(tmp_str))
-	put16(c0, chara_int, uint16(tmp_int))
-	put16(c0, chara_dex, uint16(tmp_dex))
+	c0.str = uint16(tmp_str)
+	c0.int = uint16(tmp_int)
+	c0.dex = uint16(tmp_dex)
 	if M_or_F == 'M' {
-		c0[chara_p_24] = 0x0b
+		c0.p_24 = 0x0b
 	} else {
-		c0[chara_p_24] = 0x0c
+		c0.p_24 = 0x0c
 	}
 	D_6976._npc = tNPC{}
 }
@@ -354,16 +339,12 @@ func C_2E04() {
 // write PARTY.SAV and MONSTERS.SAV. The port has no disks: the original asked for the PLAYER
 // disk first and the PROGRAM disk after.
 func C_2FB8() {
-	if Save("PARTY.SAV", sizeofParty, Party[:]) == -1 {
-		exit(3)
-	}
-	if Save("MONSTERS.SAV", 0x100, D_6976._npc.bytes()) == -1 {
-		exit(3)
-	}
+	Save("PARTY.SAV", &Party)
+	Save("MONSTERS.SAV", &D_6976._npc)
 }
 
-// (I)nitiate New Game
-func C_3030() {
+// (I)nitiate New Game: true when the new party is saved and the game starts.
+func C_3030() bool {
 	Gra_2()
 	C_0B1E(16, 4, "By what name shalt thou be known")
 	C_0B1E(17, 4, "in this world and time?")
@@ -372,7 +353,7 @@ func C_3030() {
 	C_2656(player_name[:], 12)
 	if player_name[0] == 0 {
 		pAnim, pShapes = nil, nil
-		return
+		return false
 	}
 	Gra_2()
 	C_0B1E(17, 4, "Art thou Male or Female? ")
@@ -384,7 +365,7 @@ func C_3030() {
 		// quirk: compared with the full key words, Enter and Space never match; only Esc cancels
 		if M_or_F == 0x1b || M_or_F == KBD_ENTER || M_or_F == KBD_SPACE {
 			pAnim, pShapes = nil, nil
-			return
+			return false
 		}
 		u4_toupper16(&M_or_F)
 	}
@@ -397,10 +378,10 @@ func C_3030() {
 	C_2E04() /*prepare party structure*/
 	C_2FB8() /*save the new party*/
 	D_6940 = nil
-	/*-- clean & return to dos --*/
+	/*-- clean & go on to the game --*/
 	pCharset = nil
 	low_clean()
-	exit('0') // the original: 'A'+drive of the player disk; AVATAR only tells '0'/'1' apart
+	return true
 }
 
 func u4_toupper16(c *int16) {

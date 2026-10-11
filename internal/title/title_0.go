@@ -2,11 +2,14 @@ package title
 
 // Port of TITLE_0.C: the intro (Origin logo, "Ultima IV" dissolve, the view opening like a
 // scroll), the view of Britannia with its scripted tile animation, the two animated monsters,
-// the menu, and main. Plus Main, the entry point that stands in for DOS.
+// the menu, and main. Plus Main, the entry point.
 
 import (
+	"time"
+
 	"github.com/memmaker/u4-go/internal/ega"
 	"github.com/memmaker/u4-go/internal/host"
+	"github.com/memmaker/u4-go/internal/speaker"
 )
 
 var (
@@ -24,77 +27,54 @@ var (
 	D_3A84 uint16
 )
 
-// delayLoopCycles: one pass of C_02A3's while(--long) on an 8088.
-const delayLoopCycles = 40
-
-// Main runs TITLE.EXE with ULTIMA.COM's command tail (nparam = its length byte at 80h,
-// param0/param1 = the bytes at 82h/84h) and returns the exit code: '0' (the port has no
-// disks or drives; the original returned its drive flag or the player disk's drive letter),
-// or an error code. ULTIMA.COM then runs AVATAR.EXE with the
-// same tail, 84h replaced by this code's low byte and 80h set to 4, and starts over at
-// TITLE.EXE when AVATAR.EXE exits with 4.
+// Main runs the title (TITLE.EXE) and returns nil when the player journeys onward (the game
+// starts next), or the error that stopped it.
 //
 // It must run on the host's game goroutine; it shows the screen through host.ShowFrame.
-func Main(gameDir, saveDir string, nparam, param0, param1 byte) (code int) {
+func Main(gameDir, saveDir string) (err error) {
 	GameDir, SaveDir = gameDir, saveDir
-	psp = [0x100]byte{}
-	for i := 0x81; i < 0x100; i++ {
-		psp[i] = ' '
-	}
-	psp[0x80], psp[0x82], psp[0x84] = nparam, param0, param1
 	resetGlobals()
 	defer func() {
 		if r := recover(); r != nil {
-			if c, ok := r.(exitCode); ok {
-				code = int(c)
-				return
+			f, ok := r.(fail)
+			if !ok {
+				panic(r)
 			}
-			panic(r)
+			err = f.err
 		}
 	}()
 	main_()
-	return 0
+	return nil
 }
-
-type exitCode int
-
-func exit(n int) { panic(exitCode(n)) }
 
 var frame = host.Frame{Pix: make([]byte, host.ScreenW*host.ScreenH), Palette: new([768]byte)}
 
 // resetGlobals puts the initialised data back as a fresh load of TITLE.EXE has it (ULTIMA.COM
-// runs it again after each game), and shows the EGA planes as the host's frame.
+// runs it again after each game), and shows the framebuffer as the host's frame.
 func resetGlobals() {
 	D_0036, D_0038 = 0, 0
 	D_00C0, D_00C2, D_00C4, D_00C6 = 0, 1, -1, 0
 	D_3A84, D_6E80 = 0, 0
-	D_31C0, cursor_rate, D_6E76, D_6E77 = 0xffff, 0, 0, 0
+	D_31C0, cursor_rate, D_6E76 = 0xffff, 0, 0
+	monsterDue, cursorDue = 0, 0
 	D_03CC, D_03CD = 0x35, 0x9b
 	D_3A86 = [0x10]uint8{}
-	Party = [sizeofParty]byte{}
+	Party = tParty{}
 	D_6976 = t_500{}
-	cpuCarry = 0
 
-	drv = ega.New()
+	drv = ega.New(frame.Pix)
 	for i, c := range ega.Palette {
 		copy(frame.Palette[i*3:], c[:])
 	}
-	host.ShowFrame = func() *host.Frame {
-		drv.Pixels(frame.Pix)
-		return &frame
-	}
+	host.ShowFrame = func() *host.Frame { return &frame }
 }
 
 // animate the 2 "monsters": callback for u_delay
 func t_callback() { /*C_019A*/
-	if D_3A84 != 0 {
-		D_00C0 = 0
-	}
-	D_00C0--
-	if D_00C0+1 != 0 {
+	if D_3A84 == 0 && now() < monsterDue {
 		return
 	}
-	D_00C0 = int16(200 * speed_info)
+	monsterDue = now() + monsterFrame
 	if D_6E80 != 0 {
 		cursor_rate = 200
 		bp_02 := D_3380[D_0036]
@@ -118,13 +98,14 @@ func u4_putc(bp04 uint8) { /*C_027A*/
 	}
 }
 
-// C_02A3 busy-waits bp04*speed_info loop passes, unless a key is waiting.
+var monsterDue time.Duration // when t_callback moves the monsters next (D_00C0 counted passes)
+
+// C_02A3 waits bp04 calibrated loop passes, unless a key is waiting.
 func C_02A3(bp04 int32) {
 	if u_kbhit() != 0 {
 		return
 	}
-	bp04 *= int32(speed_info)
-	cpu(int(bp04) * delayLoopCycles)
+	pace(time.Duration(bp04) * delayPass)
 }
 
 // handwriting: "Lord British", dot by dot (slowly when bp04 is set)
@@ -232,12 +213,14 @@ func C_05A4() {
 		for si := speed_info / 2; si != 0 && u_kbhit() == 0; si-- {
 			Gra_0(5, 19, D_3A24[:], 104, 0, 0, 2)
 		}
+		pace(viewStep)
 		C_034D()
 		C_041A()
 		Gra_0(5, 19, D_3A24[:], 104, 0, 0, 2)
 		for si := speed_info / 2; si != 0 && u_kbhit() == 0; si-- {
 			Gra_0(5, 19, D_3A24[:], 104, 0, 0, 2)
 		}
+		pace(viewStep)
 		D_6E80 = 1
 	}
 	D_3A84 = 0
@@ -282,6 +265,8 @@ func C_068C() {
 			if speed_info > 4 {
 				Gra_B(30, 45, 5, 34, pTitle, 34, int(loc_A), 5)
 			}
+			speaker.Play(clicks(dissolveStep))
+			pace(dissolveStep)
 		}
 		u_delay(1, 1)
 	} else {
@@ -306,6 +291,7 @@ func C_068C() {
 		}
 		loc_C = 20 - int(loc_A)
 		Gra_3(int(loc_A)*2, 96, loc_C, 96, pTitle, 96, -1, loc_C)
+		pace(scrollStep)
 		C_02A3(680)
 		C_034D()
 		Gra_C(5, 19, D_3683[:], 104, pTitle, 2)
@@ -313,7 +299,7 @@ func C_068C() {
 	pTitle = nil
 
 	/*the 2 "monsters"*/
-	pAnim = make([]byte, 0x8000)
+	pAnim = make([]byte, picSize)
 	Gra_inflate("ANIMATE.EGA", pAnim)
 	for loc_A = 1; loc_A <= 32; loc_A++ {
 		if u_kbhit() != 0 {
@@ -333,12 +319,14 @@ func C_068C() {
 		for loc_B = speed_info / 2; loc_B != 0 && u_kbhit() == 0; loc_B-- {
 			Gra_0(5, 19, D_3A24[:], 104, 0, 0, 2)
 		}
+		pace(viewStep)
 		C_034D()
 		C_041A()
 		Gra_0(5, 19, D_3A24[:], 104, 0, 0, 2)
 		for loc_B = speed_info / 2; loc_B != 0 && u_kbhit() == 0; loc_B-- {
 			Gra_0(5, 19, D_3A24[:], 104, 0, 0, 2)
 		}
+		pace(viewStep)
 	}
 }
 
@@ -370,9 +358,9 @@ func C_0BCA() {
 	Gra_clrscr()
 	pShapes = make([]byte, 0x8000)
 	C_217E("SHAPES.EGZ", pShapes)
-	sizzleShapes()
+	drv.SetTiles(pShapes)
 
-	pTitle = make([]byte, 0x8000)
+	pTitle = make([]byte, picSize)
 	Gra_inflate("TITLE.EGA", pTitle)
 	C_02D1(0)
 	Gra_3(4, 4, 19, 17, pTitle, 17, -1, 19)
@@ -387,7 +375,7 @@ func C_0BCA() {
 	Gra_3(40, 96, 0, 96, pTitle, 96, -1, 0)
 	pTitle = nil
 
-	pAnim = make([]byte, 0x8000)
+	pAnim = make([]byte, picSize)
 	Gra_inflate("ANIMATE.EGA", pAnim)
 
 	bp_02 := D_3380[D_0036]
@@ -405,22 +393,17 @@ func main_() { /*C_0EAA*/
 	D_31C0 = 0
 	low_init()
 
-	u4_toupper(&psp[0x84])
-	u4_toupper(&psp[0x82])
-	/*set drive number: dropped, the port has no drives*/
-	/*set graphic type: the letter (C/E/T) or low_gra(); the port is EGA only*/
+	/*set graphic type: low_gra(); the port is EGA only*/
 	D_7078 = uint16(low_gra())
 
 	D_6E80 = 0
 	pCharset = make([]byte, 0x1000)
-	if Load("CHARSET.EGA", 0x1000, pCharset) == -1 {
-		exit(6)
-	}
+	Load("CHARSET.EGA", pCharset)
 	pShapes = make([]byte, 0x8000)
 	C_217E("SHAPES.EGZ", pShapes)
 	Gra_init()
 
-	pTitle = make([]byte, 0x8000)
+	pTitle = make([]byte, picSize)
 	Gra_inflate("TITLE.EGA", pTitle)
 	D_3A84 = 0
 	C_068C() /*logo + splash + animation*/
@@ -441,12 +424,14 @@ func main_() { /*C_0EAA*/
 			C_05A4()
 			C_0B45()
 		case KBD_I: /*(I)nitiate*/
-			C_3030()
+			if C_3030() {
+				return
+			}
 			C_0BCA()
 		case KBD_J: /*(J)ourney*/
 			pAnim, pShapes, pCharset = nil, nil, nil
 			low_clean()
-			exit('0')
+			return
 		default:
 			sound_1()
 		}

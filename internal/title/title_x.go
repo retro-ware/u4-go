@@ -7,9 +7,9 @@
 // EGA only: the CGA (*.PIC, SHAPES.CGA, CHARSET.CGA) and Tandy paths of GRAPH.ASM, LOW.ASM and
 // the C are dropped; D_7078 is always 2.
 //
-// One Go file per C/asm module, C names kept. Drawing goes to an ega.Driver's four planes,
-// which the host shows (see Main). The original's CPU-timed busy loops are paced by a cycle
-// model (cpu in low.go): see SpeedInfo.
+// One Go file per C/asm module, C names kept. Drawing goes to an ega.Driver's framebuffer,
+// which the host shows (see Main). The original's CPU-timed busy loops become real-time
+// waits (pacing in low.go, calibrated by host.SpeedInfo).
 package title
 
 // Port of TITLE_X.C: the monster animation counters.

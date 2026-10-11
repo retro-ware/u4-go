@@ -14,12 +14,10 @@ func C_2399(bp06, bp04 int) {
 		D_933A[D_08D0][D_08CE] = nil
 	}
 	if D_933A[bp06][bp04] == nil {
-		if dlseek(File_MAP, uint32((bp06*8+bp04)*0x400)) == -1 {
-			exit(1)
-		}
 		m := new(tMap32x32)
-		if dread(File_MAP, m, 0x400) != 0x400 {
-			exit(3)
+		chunk := File_MAP[(bp06*8+bp04)*0x400:]
+		for y := range m {
+			copy(m[y][:], chunk[y*32:])
 		}
 		D_933A[bp06][bp04] = m
 	}
@@ -73,13 +71,8 @@ func C_26B6() {
 func C_2747() {
 	u4_puts("Leaving...\n")
 	CurMode = MOD_VISION
-	if Load("OUTMONST.SAV", sizeof(&D_8742._npc), &D_8742._npc) == -1 {
-		exit(3)
-	}
-	if File_TLK != 0 {
-		dclose(File_TLK)
-		File_TLK = 0
-	}
+	LoadRec("OUTMONST.SAV", &D_8742._npc)
+	File_TLK = nil
 	Party._x = Party.out_x
 	Party._y = Party.out_y
 	C_26B6()

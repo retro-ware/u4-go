@@ -1,6 +1,5 @@
-// Package speaker plays the PC speaker: the game toggles port 61h bit 1 in CPU-timed loops,
-// which the port turns into a list of (level, duration) segments rendered as a square wave
-// into one Ebiten audio stream.
+// Package speaker is the PC speaker as a plain synth: a sound is a list of notes (a square
+// wave of a frequency for a duration, or silence), rendered into one Ebiten audio stream.
 package speaker
 
 import (
@@ -14,17 +13,28 @@ import (
 
 const rate = 44100
 
-// Seg is one stretch of the speaker cone held in or out.
-type Seg struct {
-	On bool
-	Us float64 // microseconds
+// Note is a square wave of Hz for Dur; Hz 0 is silence.
+type Note struct {
+	Hz  float64
+	Dur time.Duration
 }
+
+// Half is one half period of a square wave lasting us microseconds: sweeps and noise are
+// sequences of such halves.
+func Half(us float64) Note {
+	return Note{Hz: 1e6 / (2 * us), Dur: time.Duration(us * float64(time.Microsecond))}
+}
+
+// Beep is the error beep (sound_1 in both programs): 16 half periods of 0CAh*3 calibrated
+// delay-loop passes (6.875 us each), a 120 Hz buzz of 67 ms.
+var Beep = []Note{{Hz: 1e6 / (2 * 0xca * 3 * 6.875), Dur: 16 * time.Duration(0xca*3*6875) * time.Nanosecond}}
 
 var (
 	mu      sync.Mutex
 	pcm     []int16 // queued samples
 	started bool
-	frac    float64
+	frac    float64 // sample time owed between notes
+	phase   float64 // of the square wave, in periods
 	lp      float64 // one-pole low-pass state (the speaker is no ideal square)
 )
 
@@ -42,29 +52,43 @@ func Start() {
 	p.Play()
 }
 
-// Play queues segments and returns their total length.
-func Play(segs []Seg) time.Duration {
+// Play queues notes and returns their total length.
+func Play(notes []Note) time.Duration {
 	mu.Lock()
 	defer mu.Unlock()
-	total := 0.0
-	for _, s := range segs {
-		total += s.Us
-		n := s.Us*rate/1e6 + frac
-		k := int(n)
-		frac = n - float64(k)
-		target := -6000.0
-		if s.On {
-			target = 6000
-		}
-		for i := 0; i < k; i++ {
-			lp += (target - lp) * 0.5
-			pcm = append(pcm, int16(lp))
-		}
-	}
+	pcm = append(pcm, Render(notes)...)
 	if len(pcm) > rate*4 { // never let the queue run away
 		pcm = pcm[len(pcm)-rate*4:]
 	}
-	return time.Duration(total * float64(time.Microsecond))
+	var total time.Duration
+	for _, n := range notes {
+		total += n.Dur
+	}
+	return total
+}
+
+// Render turns notes into mono 44.1 kHz samples, carrying the phase across calls.
+func Render(notes []Note) []int16 {
+	var out []int16
+	for _, n := range notes {
+		f := n.Dur.Seconds()*rate + frac
+		k := int(f)
+		frac = f - float64(k)
+		for i := 0; i < k; i++ {
+			target := 0.0
+			if n.Hz > 0 {
+				target = 6000
+				if phase >= 0.5 {
+					target = -6000
+				}
+				phase += n.Hz / rate
+				phase -= float64(int(phase))
+			}
+			lp += (target - lp) * 0.5
+			out = append(out, int16(lp))
+		}
+	}
+	return out
 }
 
 type stream struct{}

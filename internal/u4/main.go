@@ -1,36 +1,22 @@
 package u4
 
-// Port of U4_MAIN.C and U4_MAIN2.C (unsigned char), plus the entry point that stands in for
-// DOS: it runs AVATAR.EXE's main on the game goroutine and turns exit() into a return code.
+// Port of U4_MAIN.C and U4_MAIN2.C (unsigned char), plus Main, the game's entry point.
 
-// Main runs AVATAR.EXE with ULTIMA.COM's command line (graphics letter, drive digit from
-// TITLE.EXE) and returns its exit code.
-func Main(param0, param1 byte) (code int) {
-	psp = [0x100]byte{}
-	psp[0x80] = 4
-	psp[0x81] = ' '
-	psp[0x82] = param0
-	psp[0x83] = ' '
-	psp[0x84] = param1
+// Main runs the game (AVATAR.EXE) on the host's game goroutine. It returns nil when the game
+// wants the title back (no party formed), else the error that stopped it.
+func Main() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			if c, ok := r.(exitCode); ok {
-				code = int(c)
-				closeAll()
-				return
+			s, ok := r.(stop)
+			if !ok {
+				panic(r)
 			}
-			panic(r)
+			err = s.err
 		}
 	}()
 	resetGlobals()
 	main_()
-	return 0
-}
-
-func closeAll() {
-	for h := range files {
-		dclose(h)
-	}
+	return nil
 }
 
 // catchJmp runs f, returning normally when it longjmps to D_9458.
@@ -54,10 +40,8 @@ func main_() { /*C_191E*/
 	C_C51C()
 	if Party._loc >= 0x11 && Party._loc <= 0x18 {
 		CurMode = MOD_DUNGEON
-		if Load("DNGMAP.SAV", 0x200, &D_8742._map) == -1 {
-			exit(3)
-		}
-		File_DNG = dopen(D_0894[Party._loc-0x11], 0)
+		Load("DNGMAP.SAV", D_8742._map[:0x200])
+		File_DNG = readFile(D_0894[Party._loc-0x11])
 		catchJmp(DNG_main)
 	} else {
 		Party._loc = 0

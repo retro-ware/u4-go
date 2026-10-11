@@ -21,9 +21,6 @@ var (
 	D_6826 [0x1000]uint8 // output stack (0x100 bytes in the original; a longer chain ran into the rest of _BSS)
 )
 
-// inflateCycles: per decoded byte, in the cycle model.
-const inflateCycles = 250
-
 func tab(code uint16) uint16 { return D_3B26[code-0x100] }
 
 // C_21E5 finds the dictionary slot for (prefix bp04, byte bp06): the slot holding it, or the
@@ -160,9 +157,7 @@ func C_23C3(name string, cb func(uint8)) int {
 	}
 	D_3B20 = uint16(len(b))
 	D_3B22 = b
-	n := 0
-	C_22D5(func(c uint8) { n++; cb(c) })
-	cpu(n * inflateCycles)
+	C_22D5(cb)
 	return 0
 }
 

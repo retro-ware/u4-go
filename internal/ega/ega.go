@@ -1,65 +1,79 @@
-// Package ega is a port of Ultima IV's EGA graphics driver (EGA.DRV), the 4.7 KB module
-// AVATAR.EXE loads at run time and calls through the U4_GRAPH.ASM thunks (Gra_00..Gra_putchar).
+// Package ega is Ultima IV's EGA graphics driver (EGA.DRV) redone as plain pixel code.
 //
-// The driver drew into the EGA's four bit planes (mode 0Dh, 320x200, 40 bytes a row) with the
-// sequencer map mask, the graphics controller's function select (OR/XOR/AND) and bit mask, and
-// write mode 1 latch copies. The port keeps the four planes as byte arrays and does exactly
-// those operations on them, so every routine stays byte for byte what the driver wrote; Pixels
-// turns the planes into a 320x200 picture of colour indexes 0..15.
+// The screen is a 320x200 framebuffer of colour indexes 0..15 (the EGA palette, Palette).
+// The tile set (SHAPES.EGA: 256 tiles of 16x16) and the font (CHARSET.EGA: 128 glyphs of
+// 8x8) are decoded once into per-pixel arrays, so another tile set (VGA, say) only has to
+// fill Tiles and Glyphs. Every routine keeps the original's visible result, quirks included
+// (the shake, the opening doors, the dungeon walls' Bresenham slip).
 //
-// The tile set and the font live in the game's memory (pShapes, pCharset) in the planar layout
-// sizzleShapes / sizzleCharset left them in: a tile is 128 bytes, four 32-byte planes (plane 3
-// first) of 16 rows x 2 bytes; a character is 32 bytes, four 8-byte planes (plane 3 first).
-// The animations (Gra_animFlow, Gra_animFlag, Gra_animSpit, Gra_19) edit those bytes in place.
-//
-// Offsets in the comments are EGA.DRV's (the jump table at 0000h, the routines after 0277h).
+// The game's colour numbers for dots and walls (CGA's 0..3) map to EGA colours through
+// colorOf; the driver's random generator is kept for the shake clicks and the animations.
 package ega
 
 const (
-	W        = 320
-	H        = 200
-	rowBytes = 40
-	planeLen = 0x10000 // offsets are 16-bit; keep the whole segment so stray writes wrap as on DOS
+	W = 320
+	H = 200
 )
 
-// Driver is the loaded EGA.DRV with its video memory.
+// Driver is the screen, the tile set and the font.
 type Driver struct {
-	Planes [4][]byte // video memory, plane 0..3
+	Pix    []byte // W*H colour indexes, top row first
+	Tiles  [256][16 * 16]byte
+	Glyphs [128][8 * 8]byte
 
-	Shapes  []byte // the game's pShapes buffer (0x8000 bytes, planar after sizzleShapes)
-	Charset []byte // the game's pCharset buffer (0x1000 bytes, planar after sizzleCharset)
-
-	// ReadFile returns a file's contents for Gra_16/Gra_17 (the driver's own dopen/dread);
-	// ok false is the driver's error path.
+	// ReadFile returns a file's contents for Gra16/Gra17; ok false is the driver's error path.
 	ReadFile func(name string) ([]byte, bool)
-	// Exit is the pExit callback Gra_init got (the game's exit), called with the error code.
+	// Exit is the game's exit, called with the error code.
 	Exit func(code int)
-	// Speaker toggles the PC speaker (the shake's random clicks, port 61h bit 1).
+	// Speaker toggles the PC speaker (the shake's random clicks).
 	Speaker func(on bool)
 	// Present lets the host show the screen inside a routine that animates on its own (shake,
-	// Gra_17's opening doors); DOS drew those straight to the screen.
+	// Gra17's opening doors).
 	Present func()
 
-	seed [4]byte // 0036h: random seed 12h,34h,56h,78h
-
-	speakerOn bool
+	seed [4]byte // random seed 12h,34h,56h,78h
 }
 
-// New returns the driver in the state EGA.DRV is loaded in.
-func New() *Driver {
-	d := &Driver{seed: [4]byte{0x12, 0x34, 0x56, 0x78}}
-	for p := range d.Planes {
-		d.Planes[p] = make([]byte, planeLen)
+// New returns the driver drawing into pix (W*H bytes; a fresh buffer when nil).
+func New(pix []byte) *Driver {
+	if pix == nil {
+		pix = make([]byte, W*H)
 	}
-	return d
+	return &Driver{Pix: pix, seed: [4]byte{0x12, 0x34, 0x56, 0x78}}
 }
 
-// line is the driver's line table (0052h, filled by Gra_init): row * 40.
-func line(row int) int { return row * rowBytes }
+// unpack decodes packed pixels (two a byte, high nibble first) into dst; missing bytes are 0.
+func unpack(dst []byte, packed []byte) {
+	for i := range dst {
+		var b byte
+		if i/2 < len(packed) {
+			b = packed[i/2]
+		}
+		if i&1 == 0 {
+			dst[i] = b >> 4
+		} else {
+			dst[i] = b & 0xf
+		}
+	}
+}
 
-// colorMask (01F3h) maps the game's dot and wall colours (CGA's 0..3) to EGA plane masks;
-// indexes past the table read the zero bytes after it.
-func colorMask(c int) byte {
+// SetTiles decodes SHAPES.EGA's 256 tiles (128 bytes each).
+func (d *Driver) SetTiles(packed []byte) {
+	for t := range d.Tiles {
+		unpack(d.Tiles[t][:], packed[min(len(packed), t*128):])
+	}
+}
+
+// SetGlyphs decodes CHARSET.EGA's 128 glyphs (32 bytes each).
+func (d *Driver) SetGlyphs(packed []byte) {
+	for c := range d.Glyphs {
+		unpack(d.Glyphs[c][:], packed[min(len(packed), c*32):])
+	}
+}
+
+// colorOf maps the game's dot and wall colours (CGA's 0..3) to EGA colours; past the
+// driver's table it read zeros.
+func colorOf(c int) byte {
 	switch c & 0xff {
 	case 1:
 		return 2
@@ -71,8 +85,8 @@ func colorMask(c int) byte {
 	return 0
 }
 
-// Palette is the EGA palette Gra_init sets (01E2h: the default 0..7, 38h..3Fh) as 6-bit
-// VGA DAC values, for colour indexes 0..15.
+// Palette is the EGA palette (the default 0..7, 38h..3Fh) as 6-bit VGA DAC values, for
+// colour indexes 0..15.
 var Palette = func() [16][3]byte {
 	regs := [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f}
 	var p [16][3]byte
@@ -87,94 +101,78 @@ var Palette = func() [16][3]byte {
 	return p
 }()
 
-// Pixels writes the screen as colour indexes (0..15) into pix (320*200 bytes, top row first).
-func (d *Driver) Pixels(pix []byte) {
-	p0, p1, p2, p3 := d.Planes[0], d.Planes[1], d.Planes[2], d.Planes[3]
-	for y := 0; y < H; y++ {
-		for xb := 0; xb < rowBytes; xb++ {
-			o := y*rowBytes + xb
-			b0, b1, b2, b3 := p0[o], p1[o], p2[o], p3[o]
-			out := pix[y*W+xb*8:]
-			for bit := 0; bit < 8; bit++ {
-				m := byte(0x80) >> bit
-				var c byte
-				if b0&m != 0 {
-					c |= 1
-				}
-				if b1&m != 0 {
-					c |= 2
-				}
-				if b2&m != 0 {
-					c |= 4
-				}
-				if b3&m != 0 {
-					c |= 8
-				}
-				out[bit] = c
-			}
+// --- pixel helpers -----------------------------------------------------------------------
+// Pixels are addressed by linear index y*W + x: an x past the right edge runs on into the
+// next row, as it did in video memory; anything off the screen is dropped (reads 0).
+
+func (d *Driver) at(i int) *byte {
+	if i < 0 || i >= len(d.Pix) {
+		return nil
+	}
+	return &d.Pix[i]
+}
+
+func (d *Driver) set(i int, c byte) {
+	if p := d.at(i); p != nil {
+		*p = c
+	}
+}
+
+func (d *Driver) or(i int, c byte) {
+	if p := d.at(i); p != nil {
+		*p |= c
+	}
+}
+
+func (d *Driver) xor(i int, c byte) {
+	if p := d.at(i); p != nil {
+		*p ^= c
+	}
+}
+
+func (d *Driver) get(i int) byte {
+	if p := d.at(i); p != nil {
+		return *p
+	}
+	return 0
+}
+
+// fill sets w x h pixels from (x, y) to c.
+func (d *Driver) fill(x, y, w, h int, c byte) {
+	for r := y; r < y+h; r++ {
+		for i := 0; i < w; i++ {
+			d.set(r*W+x+i, c)
 		}
 	}
 }
 
-// --- planar write helpers ---------------------------------------------------------------
-
-// put writes v to the planes in mask (map mask, write mode 0, replace, bit mask FFh).
-func (d *Driver) put(mask byte, off int, v byte) {
-	off &= 0xffff
-	for p := 0; p < 4; p++ {
-		if mask&(1<<p) != 0 {
-			d.Planes[p][off] = v
+// invert XORs w x h pixels from (x, y) with c.
+func (d *Driver) invert(x, y, w, h int, c byte) {
+	for r := y; r < y+h; r++ {
+		for i := 0; i < w; i++ {
+			d.xor(r*W+x+i, c)
 		}
 	}
 }
 
-// or sets the bits of bm on the planes in mask: write mode 0 writing FFh through the bit
-// mask (replace, or function OR) - the driver's "or byte [es:di],0ffh".
-func (d *Driver) or(mask byte, off int, bm byte) {
-	off &= 0xffff
-	for p := 0; p < 4; p++ {
-		if mask&(1<<p) != 0 {
-			d.Planes[p][off] |= bm
+// copyRow copies n pixels of row src to row dst, from x.
+func (d *Driver) copyRow(dst, src, x, n int) {
+	for i := 0; i < n; i++ {
+		d.set(dst*W+x+i, d.get(src*W+x+i))
+	}
+}
+
+// Tile draws tile t with its top left at (x, y).
+func (d *Driver) Tile(t, x, y int) {
+	g := &d.Tiles[t&0xff]
+	for r := 0; r < 16; r++ {
+		for c := 0; c < 16; c++ {
+			d.set((y+r)*W+x+c, g[r*16+c])
 		}
 	}
 }
 
-// xor flips the bits of bm on the planes in mask (function select XOR).
-func (d *Driver) xor(mask byte, off int, bm byte) {
-	off &= 0xffff
-	for p := 0; p < 4; p++ {
-		if mask&(1<<p) != 0 {
-			d.Planes[p][off] ^= bm
-		}
-	}
-}
-
-// latch copies a byte on all four planes (write mode 1: read loads the latches, write
-// stores them).
-func (d *Driver) latch(dst, src int) {
-	dst &= 0xffff
-	src &= 0xffff
-	for p := 0; p < 4; p++ {
-		d.Planes[p][dst] = d.Planes[p][src]
-	}
-}
-
-func rd(b []byte, off int) byte {
-	if off < 0 || off >= len(b) {
-		return 0
-	}
-	return b[off]
-}
-
-func wr(b []byte, off int, v byte) {
-	if off >= 0 && off < len(b) {
-		b[off] = v
-	}
-}
-
-// random (0EC6h): the driver's own generator. Every caller enters with the carry clear (the
-// thunk's last add, a cmp with 0, an and), so the first adc is an add, and so is the second
-// (after an xor).
+// random: the driver's own generator (every caller enters with the carry clear).
 func (d *Driver) random() byte {
 	s := &d.seed
 	a := s[3] + s[2]
@@ -193,91 +191,50 @@ func (d *Driver) present() {
 	}
 }
 
-// --- the jump table ----------------------------------------------------------------------
+// --- the driver's entries ----------------------------------------------------------------
 
-// Init is Gra_init (0E2Eh): mode 0Dh, the palette, and the pointers to the tiles, the font
-// and the exit callback.
-func (d *Driver) Init(shapes, charset []byte, exit func(int)) {
-	d.Shapes, d.Charset, d.Exit = shapes, charset, exit
+// Init is Gra_init: the exit callback and a clear screen.
+func (d *Driver) Init(exit func(int)) {
+	d.Exit = exit
 	d.ClrScr()
 }
 
-// ClrScr is Gra_clrscr (0EA5h): all four planes zero.
-func (d *Driver) ClrScr() {
-	for p := range d.Planes {
-		clear(d.Planes[p][:0x1f40])
-	}
-}
+// ClrScr is Gra_clrscr.
+func (d *Driver) ClrScr() { clear(d.Pix) }
 
-// Gra00 (11C6h) ORs a white 16x16 frame (2 pixels thick) around map cell (y, x): the cursor.
+// Gra00 ORs a white 16x16 frame (2 pixels thick) around map cell (y, x): the cursor.
 func (d *Driver) Gra00(y, x int) {
-	di := line((y*16+8)&0xffff) + x*2 + 1
-	for i := 0; i < 2; i++ {
-		d.or(0xf, di, 0xff)
-		d.or(0xf, di+1, 0xff)
-		di += rowBytes
-	}
-	for i := 0; i < 12; i++ {
-		d.or(0xf, di+i*rowBytes, 0xc0)
-		d.or(0xf, di+1+i*rowBytes, 0x03)
-	}
-	di += 12 * rowBytes
-	for i := 0; i < 2; i++ {
-		d.or(0xf, di, 0xff)
-		d.or(0xf, di+1, 0xff)
-		di += rowBytes
+	x0, y0 := x*16+8, (y*16+8)&0xffff
+	for r := 0; r < 16; r++ {
+		for c := 0; c < 16; c++ {
+			if r < 2 || r >= 14 || c < 2 || c >= 14 {
+				d.or((y0+r)*W+x0+c, 15)
+			}
+		}
 	}
 }
 
-// Gra01 (0277h) draws row trow of a tile at screen row srow, x = scol*4, 1x or (exp != 1)
-// 2x wide.
+// Gra01 draws row trow of a tile at screen row srow, x = (scol/2)*8, 1x or (exp != 1) 2x
+// wide.
 func (d *Driver) Gra01(tile, trow, srow, scol, exp int) {
-	si := tile*128 + trow*2
-	for p := 3; p >= 0; p-- {
-		di := scol>>1 + line(srow)
-		for i := 0; i < 2; i++ {
-			al := rd(d.Shapes, si)
-			si++
-			if exp == 1 {
-				d.put(1<<p, di, al)
-				di++
-				continue
-			}
-			var bx uint16
-			for b := 7; b >= 0; b-- {
-				bit := uint16(al>>b) & 1
-				bx = bx<<2 | bit<<1 | bit
-			}
-			d.put(1<<p, di, byte(bx>>8))
-			d.put(1<<p, di+1, byte(bx))
-			di += 2
-		}
-		si += 0x20 - 2
-	}
-}
-
-// drawTile copies a 16x16 tile (128 planar bytes at si) to di.
-func (d *Driver) drawTile(si, di int) {
-	for p := 3; p >= 0; p-- {
-		for r := 0; r < 16; r++ {
-			d.put(1<<p, di+r*rowBytes, rd(d.Shapes, si))
-			d.put(1<<p, di+r*rowBytes+1, rd(d.Shapes, si+1))
-			si += 2
+	i := srow*W + (scol>>1)*8
+	row := d.Tiles[tile&0xff][trow*16:]
+	for c := 0; c < 16; c++ {
+		if exp == 1 {
+			d.set(i+c, row[c])
+		} else {
+			d.set(i+2*c, row[c])
+			d.set(i+2*c+1, row[c])
 		}
 	}
 }
 
-// Gra02 (0350h) fills h rows of w tiles with one tile, from pixel row row, x = col*4.
+// Gra02 fills h rows of w tiles with one tile, from pixel row row, x = (col/2)*8.
 func (d *Driver) Gra02(h, w, tile, row, col int) {
-	si := tile*128 + 0 // the tile is reread for every cell
-	r := row
-	for h = h & 0xffff; ; {
-		di := col>>1 + line(r)
+	for r := row; ; r += 16 {
 		for c := 0; c < w&0xff; c++ {
-			d.drawTile(si, di)
-			di += 2
+			d.Tile(tile, ((col>>1)+c*2)*8, r)
 		}
-		r += 16
 		h--
 		if h&0xffff == 0 {
 			break
@@ -285,26 +242,23 @@ func (d *Driver) Gra02(h, w, tile, row, col int) {
 	}
 }
 
-func (d *Driver) click(sound bool, dh *bool) {
-	if sound && d.random()&1 != 0 {
-		*dh = !*dh
-		if d.Speaker != nil {
-			d.Speaker(*dh)
+// shake moves the map window (x 8..183, rows 8..185) 2 rows down or up, a row at a time,
+// clicking the speaker at random when sound is on.
+func (d *Driver) shake(sound, down bool) {
+	on := false
+	for k := 0; k < 173; k++ {
+		if down {
+			r := 173 - k
+			d.copyRow(r+10, r+8, 8, 176)
+		} else {
+			d.copyRow(k+8, k+10, 8, 176)
 		}
-	}
-}
-
-// Gra03 (041Dh, pascal) moves the map window 2 rows down (the earthquake), clicking the
-// speaker at random when sound is on.
-func (d *Driver) Gra03(sound bool) {
-	dh := false
-	for bx := 0x15a; bx != 0; bx -= 2 {
-		di := line(bx/2+10) + 1
-		si := line(bx/2+8) + 1
-		for i := 0; i < 0x16; i++ {
-			d.latch(di+i, si+i)
+		if sound && d.random()&1 != 0 {
+			on = !on
+			if d.Speaker != nil {
+				d.Speaker(on)
+			}
 		}
-		d.click(sound, &dh)
 	}
 	if d.Speaker != nil {
 		d.Speaker(false)
@@ -312,135 +266,67 @@ func (d *Driver) Gra03(sound bool) {
 	d.present()
 }
 
-// Gra04 (048Fh, pascal) moves the map window 2 rows up.
-func (d *Driver) Gra04(sound bool) {
-	dh := false
-	for bx := 0; bx != 0x15a; bx += 2 {
-		di := line(bx/2+8) + 1
-		si := line(bx/2+10) + 1
-		for i := 0; i < 0x16; i++ {
-			d.latch(di+i, si+i)
-		}
-		d.click(sound, &dh)
-	}
-	if d.Speaker != nil {
-		d.Speaker(false)
-	}
-	d.present()
-}
+// Gra03 moves the map window 2 rows down (the earthquake).
+func (d *Driver) Gra03(sound bool) { d.shake(sound, true) }
 
-// Gra05 (0505h) draws the map window: h rows of 11 tiles from the tile numbers in src,
-// starting at pixel (8, 8). The width argument is not used.
+// Gra04 moves the map window 2 rows up.
+func (d *Driver) Gra04(sound bool) { d.shake(sound, false) }
+
+// Gra05 draws the map window: h rows of 11 tiles from the tile numbers in src, starting at
+// pixel (8, 8). The width argument is not used.
 func (d *Driver) Gra05(h, w int, src []byte) {
 	k := 0
 	for r := 0; h&0xffff != 0; r++ {
-		di := line(8+r*16) + 1
 		for c := 0; c < 11; c++ {
 			t := 0
 			if k < len(src) {
 				t = int(src[k])
 			}
 			k++
-			d.drawTile(t*128, di)
-			di += 2
+			d.Tile(t, 8+c*16, 8+r*16)
 		}
 		h--
 	}
 }
 
-// Dot is Gra_dot (088Eh): pixel (x, y) set to a colour (AND 0 on all planes, then OR the
-// colour's planes).
-func (d *Driver) Dot(y, x, col int) {
-	bm := byte(0x80) >> (x & 7)
-	di := line(y&0xffff) + (x&0xffff)>>3
-	off := di & 0xffff
-	for p := 0; p < 4; p++ {
-		d.Planes[p][off] &^= bm
-	}
-	d.or(colorMask(col), di, bm)
-}
+func dot(y, x int) int { return (y&0xffff)*W + x&0xffff }
 
-// DotOR is Gra_dot_OR (07C4h).
-func (d *Driver) DotOR(y, x, col int) {
-	d.or(colorMask(col), line(y&0xffff)+(x&0xffff)>>3, byte(0x80)>>(x&7))
-}
+// Dot is Gra_dot: pixel (x, y) set to a colour.
+func (d *Driver) Dot(y, x, col int) { d.set(dot(y, x), colorOf(col)) }
 
-// DotXOR is Gra_dot_XOR (081Dh).
-func (d *Driver) DotXOR(y, x, col int) {
-	d.xor(colorMask(col), line(y&0xffff)+(x&0xffff)>>3, byte(0x80)>>(x&7))
-}
+// DotOR is Gra_dot_OR.
+func (d *Driver) DotOR(y, x, col int) { d.or(dot(y, x), colorOf(col)) }
 
-// CR is Gra_CR (05D3h): the text window (x 192..319, rows 96..191) scrolls up one line and
-// the bottom line (rows 184..191) is cleared.
+// DotXOR is Gra_dot_XOR.
+func (d *Driver) DotXOR(y, x, col int) { d.xor(dot(y, x), colorOf(col)) }
+
+// CR is Gra_CR: the text window (x 192..319, rows 96..191) scrolls up one line and the
+// bottom line (rows 184..191) is cleared.
 func (d *Driver) CR() {
-	for r := 0; r < 0x58; r++ {
-		di := line(96+r) + 0x18
-		si := line(104+r) + 0x18
-		for i := 0; i < 0x10; i++ {
-			d.latch(di+i, si+i)
-		}
+	for r := 96; r < 184; r++ {
+		d.copyRow(r, r+8, 192, 128)
 	}
-	for r := 0; r < 8; r++ {
-		di := line(184+r) + 0x18
-		for i := 0; i < 0x10; i++ {
-			d.put(0xf, di+i, 0)
-		}
-	}
+	d.fill(192, 184, 128, 8, 0)
 }
 
-// Gra09 (0646h) inverts the map window (XOR colour 7, x 8..183, rows 8..183).
-func (d *Driver) Gra09() {
-	for r := 0; r < 0xb0; r++ {
-		di := line(8+r) + 1
-		for i := 0; i < 0x16; i++ {
-			d.xor(7, di+i, 0xff)
-		}
-	}
-}
+// Gra09 inverts the map window (XOR colour 7, x 8..183, rows 8..183).
+func (d *Driver) Gra09() { d.invert(8, 8, 176, 176, 7) }
 
-// Gra10 (0694h) clears the map window.
-func (d *Driver) Gra10() {
-	for r := 8; r < 0xb8; r++ {
-		di := line(r) + 1
-		for i := 0; i < 0x16; i++ {
-			d.put(0xf, di+i, 0)
-		}
-	}
-}
+// Gra10 clears the map window.
+func (d *Driver) Gra10() { d.fill(8, 8, 176, 176, 0) }
 
-// Gra11 (06C9h, pascal) inverts party member a's line in the status box (XOR 7).
-func (d *Driver) Gra11(a int) {
-	r := ((a + 1) * 8) & 0xffff
-	for i := 0; i < 8; i++ {
-		di := line(r+i) + 0x18
-		for c := 0; c < 0xf; c++ {
-			d.xor(7, di+c, 0xff)
-		}
-	}
-}
+// Gra11 inverts party member a's line in the status box (XOR 7).
+func (d *Driver) Gra11(a int) { d.invert(192, ((a+1)*8)&0xffff, 120, 8, 7) }
 
-// Gra12 (0724h) inverts one character cell (x, y) (XOR 7). The game never calls it.
-func (d *Driver) Gra12(x, y int) {
-	bx := line((y*8)&0xffff) + x
-	for i := 0; i < 8; i++ {
-		d.xor(7, bx+i*rowBytes, 0xff)
-	}
-}
+// Gra12 inverts one character cell (x, y) (XOR 7). The game never calls it.
+func (d *Driver) Gra12(x, y int) { d.invert(x*8, (y*8)&0xffff, 8, 8, 7) }
 
-// Gra13 (0792h) clears the status box (x 192..311, rows 8..71).
-func (d *Driver) Gra13() {
-	for r := 8; r < 72; r++ {
-		di := line(r) + 0x18
-		for i := 0; i < 0xf; i++ {
-			d.put(0xf, di+i, 0)
-		}
-	}
-}
+// Gra13 clears the status box (x 192..311, rows 8..71).
+func (d *Driver) Gra13() { d.fill(192, 8, 120, 64, 0) }
 
-// Gra16 is the picture loader (091Dh, pic_inflate): an RLE file (byte 02h, count, value; every
-// byte two pixels, high nibble first). With mem == nil the picture is ORed onto the screen,
-// starting at byte xoff of row 0; otherwise it is unpacked into mem (32000 bytes: plane 3,
-// 2, 1, 0 of 8000 bytes each, cleared first).
+// Gra16 loads an RLE picture (byte 02h, count, value; every byte two pixels, high nibble
+// first). With mem == nil the picture is ORed onto the screen, its first row starting at
+// x = xoff*8; otherwise it is unpacked into mem (W*H pixels).
 func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 	data, ok := d.ReadFile(name)
 	if !ok {
@@ -448,129 +334,80 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 		return
 	}
 	si := 0
-	lodsb := func() byte {
-		b := rd(data, si)
+	next := func() byte {
+		var b byte
+		if si < len(data) {
+			b = data[si]
+		}
 		si++
 		return b
 	}
-	di := line(0) + xoff
 	if mem != nil {
-		clear(mem[:min(len(mem), 0x7d00)])
-		ah := byte(0x80)
-		bx := 0x1f40
-		for {
-			cx := 1
-			al := lodsb()
-			ch := byte(0)
-			if al == 2 {
-				cx = int(lodsb())
-				al = lodsb()
-				ch = al
-			}
-			for {
-				for half := 0; half < 2; half++ {
-					for pl := 0; pl < 4; pl++ {
-						if al&0x80 != 0 {
-							o := di + pl*0x1f40
-							wr(mem, o, rd(mem, o)|ah)
-						}
-						al <<= 1
-					}
-					cf := ah&1 != 0
-					ah >>= 1
-					if half == 1 {
-						al = ch
-						if cf {
-							ah = 0x80
-							di++
-							bx--
-							if bx == 0 {
-								return
-							}
-						}
-					} else if cf { // a nibble boundary never ends a byte (ah starts at 80h)
-						ah = 0x80
-					}
-				}
-				cx = (cx & 0xff00) | int(byte(cx)-1)
-				if byte(cx) == 0 {
-					break
+		clear(mem)
+		i := xoff * 8
+		for n := W * H; ; {
+			cnt, b := 1, next()
+			if b == 2 {
+				cnt, b = int(next()), next()
+				if cnt == 0 {
+					cnt = 0x100
 				}
 			}
-		}
-	}
-	mask := byte(0x80)
-	bx, dx := 0, 0
-	for {
-		cx := 1
-		al := lodsb()
-		if al == 2 {
-			cx = int(lodsb())
-			al = lodsb()
-		}
-		for {
-			d.or(al>>4, di+bx, mask)
-			mask = mask>>1 | mask<<7
-			if mask == 0x80 {
-				bx++
-			}
-			d.or(al&0xf, di+bx, mask)
-			mask = mask>>1 | mask<<7
-			if mask == 0x80 {
-				bx++
-			}
-			if bx >= 0x28 {
-				dx++
-				if dx == 0xc8 {
+			for ; cnt > 0; cnt-- {
+				if i >= 0 && i+1 < len(mem) {
+					mem[i], mem[i+1] = b>>4, b&0xf
+				}
+				i += 2
+				if n -= 2; n == 0 {
 					return
 				}
-				di = line(dx)
-				bx = 0
 			}
-			cx = (cx - 1) & 0xffff
-			if cx == 0 {
-				break
+		}
+	}
+	i, x, y := xoff*8, 0, 0
+	for {
+		cnt, b := 1, next()
+		if b == 2 {
+			cnt, b = int(next()), next()
+			if cnt == 0 {
+				cnt = 0x10000
+			}
+		}
+		for ; cnt > 0; cnt-- {
+			d.or(i+x, b>>4)
+			d.or(i+x+1, b&0xf)
+			if x += 2; x >= W {
+				if y++; y == H {
+					return
+				}
+				i, x = y*W, 0
 			}
 		}
 	}
 }
 
-// Gra17 (0AE3h, pascal) opens the map window like a pair of doors onto a picture (the
-// shrine/mystic views): the old picture slides out to both sides while the new one grows
-// from the middle, 11 steps. Without memory for the picture it clears the window and draws
-// the picture straight to the screen.
+// Gra17 opens the map window like a pair of doors onto a picture (the shrine/mystic views):
+// the old picture slides out to both sides 8 pixels a step while the new one grows from
+// the middle, 11 steps.
 func (d *Driver) Gra17(name string) {
-	buf := make([]byte, 0x7d00)
+	buf := make([]byte, W*H)
 	d.Gra16(name, 0, buf)
-	for cl := 1; cl <= 0xb; cl++ {
-		if cl < 0xb {
-			for di := 8; di < 0xb8; di++ {
-				si := line(di)
-				for bx := 1; bx < 0xc-cl; bx++ {
-					d.latch(si+bx, si+bx+1)
-				}
-				for bx := 0x16; bx >= 0xc+cl; bx-- {
-					d.latch(si+bx, si+bx-1)
-				}
+	for cl := 1; cl <= 11; cl++ {
+		for r := 8; r < 184; r++ {
+			row := d.Pix[r*W : r*W+W]
+			if cl < 11 {
+				copy(row[8:(12-cl)*8], row[16:(13-cl)*8])
+				copy(row[(12+cl)*8:184], row[(11+cl)*8:176])
 			}
+			copy(row[(12-cl)*8:(12+cl)*8], buf[r*W+(12-cl)*8:])
 		}
-		for p := 0; p < 4; p++ {
-			plane := 3 - p
-			for r := 8; r < 0xb8; r++ {
-				base := line(r)
-				bx := 0xc - cl
-				for n := 0; n < 0xb+cl-bx+1; n++ {
-					d.Planes[plane][base+bx+n] = rd(buf, p*0x1f40+base+bx+n)
-				}
-			}
-		}
-		d.present() // the driver's delay loop (dec ax 65536 times)
+		d.present()
 	}
 }
 
-// Gra18 (0C14h) fills a quadrilateral column by column: from x0 towards x1 (x1 itself not
-// drawn), the column runs from the edge y0->y0p to the edge y1->y1p (Bresenham steps). It ORs
-// colour col, or clears when erase is set. The 3D dungeon walls.
+// Gra18 fills a quadrilateral column by column: from x0 towards x1 (x1 itself not drawn),
+// the column runs from the edge y0->y0p to the edge y1->y1p (Bresenham steps). It ORs colour
+// col, or clears when erase is set. The 3D dungeon walls.
 func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 	sign := func(v int16) int16 {
 		if v == 0 {
@@ -596,25 +433,25 @@ func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 	ea := int16(uint16(abs(dx)) >> 1)
 	eb := ea
 	for {
-		bm := byte(0x80) >> (uint16(x) & 7)
-		si := int(uint16(x) >> 3)
+		px := int(uint16(x))
 		n := int(uint16(yb - ya + 1))
 		for i := 0; i < n; i++ {
-			off := line(int(uint16(ya))+i) + si
+			// A column whose edges crossed (yb < ya) runs on for some 65535 rows: its offset
+			// wraps around video memory's 64K and comes back over the screen.
+			p := ((int(uint16(ya))+i)*W/8+px>>3)&0xffff*8 + px&7
 			if erase&0xff != 0 {
-				for p := 0; p < 4; p++ {
-					d.Planes[p][off&0xffff] &^= bm
-				}
+				d.set(p, 0)
 			} else {
-				d.or(colorMask(col), off, bm)
+				d.or(p, colorOf(col))
 			}
 		}
 		x += sx
 		ea -= abs(int16(y0p) - int16(y0))
 		eb -= abs(int16(y1p) - int16(y1))
-		// The driver keeps |dx| in SI only when it set it for the top edge; otherwise SI
-		// still holds the column's byte offset, and that is what the bottom edge adds.
-		step := int16(si)
+		// The driver keeps |dx| for the bottom edge only when it set it for the top edge;
+		// otherwise its register still holds the column's byte offset (x/8), and that is
+		// what the bottom edge adds.
+		step := int16(px >> 3)
 		if ea < 0 {
 			ya += sa
 			step = abs(dx)
@@ -630,78 +467,81 @@ func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 	}
 }
 
-// Gra19 (0D39h, pascal) builds character 7 (the ankh in the status line) row by row from
-// character 0: row i is shown while virtue i is non-zero... the driver copies the row when
-// *karma[i] == 0 (a virtue reached its highest point) and blanks it otherwise.
+// Gra19 builds glyph 7 (the ankh in the status line) row by row from glyph 0: row i is
+// copied when *karma[i] == 0 (that virtue reached its highest point) and blanked otherwise.
 func (d *Driver) Gra19(karmas [8]uint16) {
-	for si := 7; si >= 0; si-- {
-		for p := 0; p < 4; p++ {
-			if karmas[si] == 0 {
-				wr(d.Charset, si+0xe0+p*8, rd(d.Charset, si+p*8))
-			} else {
-				wr(d.Charset, si+0xe0+p*8, 0)
-			}
+	for r := 0; r < 8; r++ {
+		row := d.Glyphs[7][r*8 : r*8+8]
+		if karmas[r] == 0 {
+			copy(row, d.Glyphs[0][r*8:r*8+8])
+		} else {
+			clear(row)
 		}
 	}
 }
 
-// AnimSpit (0D9Eh) makes the flames of tile 4Bh flicker: random bits flipped in plane 3,
-// rows 7..14.
+// AnimSpit makes the flames of tile 4Bh flicker: colour bit 4 flipped at random in rows
+// 7..14.
 func (d *Driver) AnimSpit() {
 	masks := [8][2]byte{{0x00, 0x0c}, {0x80, 0x0d}, {0xc0, 0x1f}, {0xc0, 0x1f}, {0x80, 0x0f}, {0xc0, 0x1f}, {0x40, 0x12}, {0xc0, 0x18}}
+	t := &d.Tiles[0x4b]
 	for i, m := range masks {
-		ah := d.random()
-		al := d.random()
-		o := 0x25ae + i*2
-		wr(d.Shapes, o, rd(d.Shapes, o)^(al&m[1]))
-		wr(d.Shapes, o+1, rd(d.Shapes, o+1)^(ah&m[0]))
+		right := d.random() & m[0]
+		left := d.random() & m[1]
+		row := t[(7+i)*16:]
+		for k := 0; k < 8; k++ {
+			if left&(0x80>>k) != 0 {
+				row[k] ^= 4
+			}
+			if right&(0x80>>k) != 0 {
+				row[8+k] ^= 4
+			}
+		}
 	}
 }
 
-// AnimFlow (0FACh, pascal) scrolls a tile down one row (water, lava): each plane's rows
-// rotate, the last row coming back on top.
+// AnimFlow scrolls a tile down one row (water, lava), the last row coming back on top.
 func (d *Driver) AnimFlow(tile int) {
-	bx := (tile * 128) & 0xffff
-	if bx+128 > len(d.Shapes) {
+	if tile < 0 || tile >= len(d.Tiles) {
 		return
 	}
-	t := d.Shapes[bx : bx+128]
-	var last [4][2]byte
-	for p := 0; p < 4; p++ {
-		last[p] = [2]byte{t[p*0x20+0x1e], t[p*0x20+0x1f]}
-	}
-	copy(t[2:], t[:126])
-	for p := 0; p < 4; p++ {
-		t[p*0x20], t[p*0x20+1] = last[p][0], last[p][1]
+	t := &d.Tiles[tile]
+	var last [16]byte
+	copy(last[:], t[15*16:])
+	copy(t[16:], t[:15*16])
+	copy(t[:16], last[:])
+}
+
+// flagRows are the flag tiles' waving rows: {tile, row}; row and row+1 swap.
+var flagRows = [5][2]int{{0x0a, 3}, {0x0b, 1}, {0x10, 2}, {0x12, 2}, {0x0e, 1}}
+
+// WaveFlag swaps the two rows of flag i (0..4).
+func (d *Driver) WaveFlag(i int) {
+	a := d.Tiles[flagRows[i][0]][flagRows[i][1]*16:]
+	for k := 0; k < 16; k++ {
+		a[k], a[16+k] = a[16+k], a[k]
 	}
 }
 
-// AnimFlag (0FFFh) waves the flags: five pairs of words swapped at random in four planes.
+// AnimFlag waves the flags, each when the generator comes out non-negative.
 func (d *Driver) AnimFlag() {
-	for _, o := range []int{0x506, 0x582, 0x804, 0x904, 0x702} {
-		if int8(d.random()) < 0 {
-			continue
-		}
-		for p := 0; p < 4; p++ {
-			a := o + p*0x20
-			b := a + 2
-			if b+1 >= len(d.Shapes) {
-				continue
-			}
-			d.Shapes[a], d.Shapes[b] = d.Shapes[b], d.Shapes[a]
-			d.Shapes[a+1], d.Shapes[b+1] = d.Shapes[b+1], d.Shapes[a+1]
+	for i := range flagRows {
+		if int8(d.random()) >= 0 {
+			d.WaveFlag(i)
 		}
 	}
 }
 
-// PutChar is Gra_putchar (114Ch, pascal): character c at text cell (x, y).
+// PutChar is Gra_putchar: character c at text cell (x, y); past the font it is blank.
 func (d *Driver) PutChar(y, x int, c byte) {
-	si := int(c) * 32
-	bx := line((y*8)&0xffff) + x
-	for p := 3; p >= 0; p-- {
-		for r := 0; r < 8; r++ {
-			d.put(1<<p, bx+r*rowBytes, rd(d.Charset, si))
-			si++
+	var g [64]byte
+	if int(c) < len(d.Glyphs) {
+		g = d.Glyphs[c]
+	}
+	i := ((y*8)&0xffff)*W + x*8
+	for r := 0; r < 8; r++ {
+		for k := 0; k < 8; k++ {
+			d.set(i+r*W+k, g[r*8+k])
 		}
 	}
 }

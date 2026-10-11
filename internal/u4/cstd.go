@@ -1,14 +1,9 @@
 package u4
 
-// The C library and runtime pieces the game uses: exit, setjmp/longjmp on D_9458, string
-// helpers on zero-terminated byte buffers.
+// The C library and runtime pieces the game uses: setjmp/longjmp on D_9458, string helpers
+// on zero-terminated byte buffers.
 
 import "strconv"
-
-// exitCode unwinds the game goroutine for exit(n).
-type exitCode int
-
-func exit(n int) { panic(exitCode(n)) }
 
 // jmpMain is longjmp(D_9458, -1): back to the setjmp in main's loop (or around DNG_main).
 type jmpMain struct{}

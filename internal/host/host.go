@@ -13,6 +13,7 @@ import (
 	"image/color"
 	"os"
 	"sync/atomic"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -54,24 +55,31 @@ var (
 	Clock    uint32
 	clockAcc int
 
-	// yieldsSinceTick counts busy calls, see Busy.
-	busyCount int
+	waitCarry time.Duration // the part of a Wait shorter than a tick, carried over
 )
+
+// SpeedInfo is the calibration knob for everything the original paced by machine speed. The
+// original measured it at start-up (LOW.ASM: thousands of delay-loop passes per 55 ms timer
+// tick, about 1 on a 4.77 MHz PC) and scaled its animation counters and delay loops by it.
+// The port assumes the era's typical machine, an 80386DX-25/33, which measured about 12; the
+// games' counters use it, and the real-time durations of the uncalibrated work (title.go's
+// and sound's constants) are taken for that machine.
+const SpeedInfo = 12
+
+// Wait lets d pass on the host clock, carrying what is shorter than a tick over to the next
+// Wait, so many short waits add up to the right time.
+func Wait(d time.Duration) {
+	waitCarry += d
+	for waitCarry >= time.Second/TPS {
+		waitCarry -= time.Second / TPS
+		Yield()
+	}
+}
 
 // Yield hands control back to Ebiten until its next tick. Only the game goroutine calls it.
 func Yield() {
-	busyCount = 0
 	yielded <- struct{}{}
 	<-tick
-}
-
-// Busy is called from routines the game spins on (the clock, input polls): after enough
-// calls without a Yield, it yields, so a busy wait lets time pass.
-func Busy() {
-	busyCount++
-	if busyCount > 64 {
-		Yield()
-	}
 }
 
 // Run starts Ebiten with the game's entry point running on its own goroutine.

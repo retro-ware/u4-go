@@ -9,13 +9,13 @@ package u4
 // u4_spell, u4_q_n_v, u4_combb) and left it signed in the others, so each ported module reads
 // a char global the way its own C did: sc() where the C sign-extended.
 //
-// Records are fixed-size Go structs whose fields are only (arrays of) uint8/uint16/uint32,
-// read and written little-endian with encoding/binary, so they are the C layout byte for byte
-// (save files are raw dumps of them).
+// Records are fixed-size Go structs; the ones in files encode and decode field by field
+// (file.go), the C layout byte for byte (save files are raw dumps of them).
 
 import (
-	"encoding/binary"
 	"fmt"
+
+	"github.com/memmaker/u4-go/internal/gamefs"
 )
 
 // sc reads a C char the way a signed-char module did.
@@ -184,10 +184,10 @@ type aStruct3 struct{ x, y, z uint8 }
 
 func init() {
 	for _, c := range []struct {
-		v    any
+		v    gamefs.Record
 		size int
-	}{{tNPC{}, 0x100}, {t_500{}, 0x500}, {tChara{}, 0x27}, {tParty{}, 0x1f6}, {tCombat{}, 0xc0}, {t_68{}, 0x68}} {
-		if n := binary.Size(c.v); n != c.size {
+	}{{&tNPC{}, 0x100}, {&t_500{}, 0x500}, {&tChara{}, 0x27}, {&tParty{}, 0x1f6}, {&tCombat{}, 0xc0}} {
+		if n := len(gamefs.Encode(c.v)); n != c.size {
 			panic(fmt.Sprintf("%T is %#x bytes, want %#x", c.v, n, c.size))
 		}
 	}
@@ -330,7 +330,7 @@ var (
 	spell_cnt    uint16
 	Combat       tCombat
 	Fighters     t_68
-	File_DNG     int16
+	File_DNG     []byte // the current dungeon file (nil: none)
 	activeChara  int16
 	D_959C       aStruct
 	tile_east    uint8
@@ -352,10 +352,10 @@ var (
 	D_95CC       int16
 	D_95CE       [0x120]uint8 // current .tlk data
 	D_96EE       uint8        // char: room exit x[dungeon]
-	File_MAP     int16
+	File_MAP     []byte       // WORLD.MAP
 	WindDir      uint16
-	D_96F4       uint8 // char: room exit y[dungeon]
-	File_TLK     int16
+	D_96F4       uint8  // char: room exit y[dungeon]
+	File_TLK     []byte // the current town's .TLK file (nil: none)
 	D_96F8       uint8
 	D_96F9       [11 * 11]uint8
 	D_9772       uint8

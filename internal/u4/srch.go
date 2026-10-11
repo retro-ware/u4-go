@@ -105,13 +105,9 @@ func C_8FB1() {
 		return
 	}
 	bp_02 -= 'A'
-	if Load(D_0824[bp_02], 0x400, &D_8742._map) == -1 {
-		exit(3)
-	}
+	Load(D_0824[bp_02], D_8742._map[:])
 	C_B9EF(0)
-	if Load(D_0824[Party._loc-1], 0x400, &D_8742._map) == -1 {
-		exit(3)
-	}
+	Load(D_0824[Party._loc-1], D_8742._map[:])
 }
 
 func anyKarma() uint16 {
