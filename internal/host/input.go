@@ -1,6 +1,9 @@
 package host
 
-import "github.com/hajimehoshi/ebiten/v2"
+import (
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+)
 
 // The keyboard is fed to the game as the BIOS keyboard buffer saw it (int 16h): one word per
 // key press, the scan code in the high byte and the ASCII code in the low byte. The game reads
@@ -58,6 +61,15 @@ func PushChar(c byte) { KeyQueue = append(KeyQueue, uint16(asciiScan[c])<<8|uint
 
 var keysDown = map[ebiten.Key]bool{}
 
+// AltKey, when set, gets the host's own Alt hot keys: 'v', '-' and '+' (the upgrade patch's
+// music toggle and volume keys).
+var AltKey func(c byte)
+
+var altKeys = map[ebiten.Key]byte{
+	ebiten.KeyV: 'v', ebiten.KeyMinus: '-', ebiten.KeyNumpadSubtract: '-',
+	ebiten.KeyEqual: '+', ebiten.KeyNumpadAdd: '+',
+}
+
 // Mouse state, in the game's 320x200 screen (top row 0).
 var (
 	MouseX, MouseY int
@@ -82,6 +94,15 @@ func pollInput(g *game) {
 	if ebiten.IsKeyPressed(ebiten.KeyAlt) {
 		Shift |= 8
 	}
+	altUsed := false
+	if Shift&8 != 0 && AltKey != nil {
+		for k, c := range altKeys {
+			if inpututil.IsKeyJustPressed(k) {
+				AltKey(c)
+				altUsed = true
+			}
+		}
+	}
 	for k, b := range specialKeys {
 		down := ebiten.IsKeyPressed(k)
 		if down && !keysDown[k] {
@@ -104,7 +125,7 @@ func pollInput(g *game) {
 			}
 			keysDown[k] = down
 		}
-	} else {
+	} else if !altUsed { // an Alt hot key types nothing (Alt+V would be the game's V)
 		for _, r := range ebiten.AppendInputChars(nil) {
 			if r < 0x80 && r >= ' ' {
 				PushChar(byte(r))

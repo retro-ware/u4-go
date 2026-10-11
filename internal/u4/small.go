@@ -1,5 +1,7 @@
 package u4
 
+import "github.com/memmaker/u4-go/internal/music"
+
 // Ports of the small command modules: U4_HOLE.C, U4_Q_N_V.C (unsigned char), U4_EVT.C,
 // U4_MIX.C and U4_LOCAT.C.
 
@@ -37,6 +39,7 @@ func CMD_HoleUp() { /*C_8AB0*/
 		name = "CAMP.DNG"
 	}
 	LoadRec(name, &Combat)
+	music.Play(music.Stop)
 	// the loop clears 32 bytes from Fighters._tile: _tile and _gtile
 	Fighters._tile = [16]uint8{}
 	Fighters._gtile = [16]uint8{}

@@ -3,7 +3,10 @@ package u4
 // Ports of U4_SHRIN.C (meditating at the shrines) and U4_END.C (the Abyss chamber and the
 // ending).
 
-import "github.com/memmaker/u4-go/internal/host"
+import (
+	"github.com/memmaker/u4-go/internal/host"
+	"github.com/memmaker/u4-go/internal/music"
+)
 
 // strnicmp compares the C string in a with b, ignoring case, for at most n characters.
 func strnicmp(a []byte, b string, n int) int {
@@ -108,6 +111,7 @@ func C_E72C() {
 	}
 	Load("SHRINE.CON", Combat._map[:])
 	CurMode = MOD_SHRINE
+	music.Play(music.Shrine)
 	u4_puts("\nYou enter the ancient shrine and sit before the altar...\nUpon what virtue dost thou meditate?\n")
 	u4_gets(loc_D[:], 15)
 	Gra_CR()
@@ -236,6 +240,7 @@ func C_3025() {
 	shakefx()
 	shakefx()
 	u_delay(3, 0)
+	music.Play(music.Fanfare)
 	Gra_17() // infinity symbol
 	u_delay(3, 0)
 	for _, s := range []string{
@@ -301,6 +306,7 @@ func C_31F4() {
 	Gra_13()
 	dspl_Stats()
 	Gra_10()
+	music.Play(music.Stop)
 	u4_puts("\n\n\nThere is a sudden darkness, and you find yourself alone in an empty chamber.\n")
 	u_delay(4, 0)
 	Gra_16("key7.ega", 0, nil)

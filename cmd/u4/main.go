@@ -19,6 +19,7 @@ import (
 	"github.com/memmaker/u4-go/internal/ega"
 	"github.com/memmaker/u4-go/internal/gameimport"
 	"github.com/memmaker/u4-go/internal/host"
+	"github.com/memmaker/u4-go/internal/music"
 	"github.com/memmaker/u4-go/internal/speaker"
 	"github.com/memmaker/u4-go/internal/title"
 	"github.com/memmaker/u4-go/internal/u4"
@@ -42,6 +43,7 @@ func main() {
 	save := flag.String("save", "", "directory for saved games (default: the game directory)")
 	imp := flag.String("import", "", "import the game files from this folder/zip/ISO/installer into -data and exit")
 	scale := flag.Int("scale", 3, "window scale")
+	noMusic := flag.Bool("nomusic", false, "no MIDI music (Alt-V toggles it, Alt-+/Alt-- set its volume)")
 	flag.Parse()
 
 	if *imp != "" {
@@ -80,6 +82,12 @@ func main() {
 	u4.GameDir, u4.SaveDir = *game, *save
 
 	speaker.Start()
+	if !*noMusic {
+		music.Start()
+		host.AltKey = func(c byte) {
+			map[byte]func(){'v': music.Toggle, '+': music.Louder, '-': music.Softer}[c]()
+		}
+	}
 	var gameErr error
 	err := host.Run("Ultima IV", *scale, func() {
 		// The title, then the game, which comes back to the title when no party is formed.

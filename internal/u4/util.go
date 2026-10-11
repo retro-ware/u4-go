@@ -1,5 +1,7 @@
 package u4
 
+import "github.com/memmaker/u4-go/internal/music"
+
 // Port of U4_UTIL.C (signed char).
 
 // shake screen + noise
@@ -185,6 +187,9 @@ func u4_putl(bp0a int32, bp06 int, bp04 int) { /*C_0C03*/
 }
 
 func u4_putc(c int) { /*C_0C9F*/
+	if c == 0x10 && txt_Y != 0 {
+		musicPrompt()
+	}
 	bp04 := uint8(c)
 	switch bp04 {
 	case '\b':
@@ -281,6 +286,7 @@ func isCharaConscious(bp04 int) bool { /*C_0E82*/
 
 // death/revive
 func C_0EB1() {
+	music.Play(music.Stop)
 	for bp_02 := int(Party.f_1d8) - 1; bp_02 >= 0; bp_02-- {
 		Party.chara[bp_02]._stat = 'D'
 		Party.chara[bp_02]._HP[0] = 0

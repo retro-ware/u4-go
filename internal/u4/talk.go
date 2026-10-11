@@ -2,7 +2,11 @@ package u4
 
 // Port of U4_TALK.C (signed char): talking to the citizens (.TLK records) and shop dispatch.
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/memmaker/u4-go/internal/music"
+)
 
 var D_2A7A = "Funny, no response!\n"
 
@@ -359,6 +363,7 @@ func C_A686(bp04 uint8) {
 		u4_puts(D_2A7A)
 		return
 	}
+	music.Play(music.Shopping)
 	D_2D54[si]()
 }
 
@@ -404,6 +409,7 @@ func CMD_Talk() { /*C_A6F3*/
 		return
 	}
 	if D_8742._npc._tile[loc_C] == TIL_5E {
+		music.Play(music.LordBritish)
 		C_E59B()
 		return
 	}

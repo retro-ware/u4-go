@@ -9,6 +9,7 @@ import (
 
 	"github.com/memmaker/u4-go/internal/ega"
 	"github.com/memmaker/u4-go/internal/host"
+	"github.com/memmaker/u4-go/internal/music"
 	"github.com/memmaker/u4-go/internal/speaker"
 )
 
@@ -33,6 +34,7 @@ var (
 // It must run on the host's game goroutine; it shows the screen through host.ShowFrame.
 func Main(gameDir, saveDir string) (err error) {
 	GameDir, SaveDir = gameDir, saveDir
+	music.Play(music.Towns) // as ULTIMA.COM asked MIDPAK before running TITLE.EXE
 	resetGlobals()
 	defer func() {
 		if r := recover(); r != nil {
