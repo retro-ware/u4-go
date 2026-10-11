@@ -17,3 +17,15 @@ Data files: ~/Projects/u4-decompiled/gog/inst (original game dir; read-only, nev
 - Check only your files: `go build -gcflags=-e ./internal/u4 2>&1 | grep -E 'yourfile.go'`. Missing functions owned
   by another module are fine while others work; don't stub them in your files.
 - Keep quirks/bugs of the original; comment them.
+
+## Modern layout (internal/host/modern.go, internal/u4/qol.go, internal/u4/wide.go)
+
+- Game rules untouched: every menu entry only queues the original key words (`host.KeyQueue`).
+  The game tells the host what it waits for with `ask(kind)` in the prompt funnels (AskDir,
+  AskLetter, AskChara, AskY_N, u4_gets with `getsWords`, the three command loops).
+- Command menus pause the game (the command prompt passes the turn when left waiting).
+- Wider view: terrain/NPCs/LOS recomputed read-only by the original rules (C_3B35/C_3B83,
+  C_3960, C_38BB) on a bigger grid; the original 11x11 picture is drawn over the middle, so
+  effects there stay exact. Outdoors beyond the loaded 32x32 window reads WORLD.MAP.
+- Keys: Enter/right click menu, click map to walk, F1 help, F3/F4 overlays, F5 history,
+  F6 original layout. Script events `h:enter|up|down|esc|f3..f6|tile:DX:DY` drive it in tests.

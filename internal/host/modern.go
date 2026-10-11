@@ -8,6 +8,7 @@ package host
 import (
 	"image"
 	"image/color"
+	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -46,6 +47,11 @@ var (
 	// MapClick returns the keys a click on the map types, the tile given relative to the
 	// party; nil keys with handled false open the menu instead.
 	MapClick func(dx, dy int) (keys []uint16, handled bool)
+	// WideView returns cols x rows tiles of map around the party (16x16 pixels each,
+	// palette indexes) for the wider view, or nil when the map window shows something else.
+	WideView func(cols, rows int) []byte
+	// WideRows is the number of map rows the wider view shows (the original shows 11).
+	WideRows = 15
 	// Glyphs returns the game's font, 8x8 palette indexes per character.
 	Glyphs func() [][64]byte
 
@@ -218,10 +224,10 @@ func modernInput(g *game) bool {
 		return false
 	}
 	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) && g.world.Dx() > 0 {
-		p := image.Pt(mx, my)
-		if p.In(g.world) && MapClick != nil {
-			t := g.world.Dx() / 11
-			dx, dy := (mx-g.world.Min.X)/t-5, (my-g.world.Min.Y)/t-5
+		if MapClick != nil {
+			t := float64(g.world.Dx()) / 11
+			dx := int(math.Floor(float64(mx-g.world.Min.X)/t)) - 5
+			dy := int(math.Floor(float64(my-g.world.Min.Y)/t)) - 5
 			keys, ok := MapClick(dx, dy)
 			if ok {
 				KeyQueue = append(KeyQueue, keys...)
@@ -312,6 +318,29 @@ func (g *game) drawModern(screen *ebiten.Image) {
 	// the map window (x, y 8..183) as large as fits, centred
 	k := float64(min(sw, sh)) / 176
 	k = float64(int(k*16)) / 16
+	var wide []byte
+	cols, rows := 0, WideRows
+	if WideView != nil {
+		k = float64(sh) / float64(rows*16)
+		cols = int(float64(sw)/(16*k)) | 1
+		cols += 2 // a partly shown column on each side
+		if wide = WideView(cols, rows); wide != nil {
+			img := ebiten.NewImage(cols*16, rows*16)
+			pix := make([]byte, len(wide)*4)
+			for i, c := range wide {
+				copy(pix[i*4:i*4+4], g.lut[c][:])
+			}
+			img.WritePixels(pix)
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(-float64(cols*16)/2, -float64(rows*16)/2)
+			op.GeoM.Scale(k, k)
+			op.GeoM.Translate(float64(sw)/2, float64(sh)/2)
+			screen.DrawImage(img, op)
+			img.Deallocate()
+		} else {
+			k = float64(int(float64(min(sw, sh))/176*16)) / 16
+		}
+	}
 	size := int(176 * k)
 	wx, wy := (sw-size)/2, (sh-size)/2
 	g.world = image.Rect(wx, wy, wx+size, wy+size)
