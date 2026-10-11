@@ -345,7 +345,6 @@ func (g *game) drawModern(screen *ebiten.Image) {
 	wx, wy := (sw-size)/2, (sh-size)/2
 	g.world = image.Rect(wx, wy, wx+size, wy+size)
 	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Translate(-8, -8)
 	op.GeoM.Scale(k, k)
 	op.GeoM.Translate(float64(wx), float64(wy))
 	screen.DrawImage(g.img.SubImage(image.Rect(8, 8, 184, 184)).(*ebiten.Image), op)
