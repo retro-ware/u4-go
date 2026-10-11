@@ -67,6 +67,7 @@ func resetGlobals() {
 	drv = ega.New(frame.Pix)
 	drv.Palette = frame.Palette
 	drv.SetMode(ega.VGA)
+	c64Reset()
 	host.ShowFrame = func() *host.Frame { return &frame }
 }
 

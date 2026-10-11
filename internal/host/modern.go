@@ -374,10 +374,14 @@ func (g *game) drawModern(screen *ebiten.Image) {
 	size := int(176 * k)
 	wx, wy := (sw-size)/2, (sh-size)/2
 	g.world = image.Rect(wx, wy, wx+size, wy+size)
-	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(k, k)
-	op.GeoM.Translate(float64(wx), float64(wy))
-	screen.DrawImage(g.img.SubImage(image.Rect(8, 8, 184, 184)).(*ebiten.Image), op)
+	if d := dungeon(); d != nil {
+		g.drawDungeon(screen, d)
+	} else {
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Scale(k, k)
+		op.GeoM.Translate(float64(wx), float64(wy))
+		screen.DrawImage(g.img.SubImage(image.Rect(8, 8, 184, 184)).(*ebiten.Image), op)
+	}
 
 	// overlays: about a third of the map's scale, at least 2; the parts of the play screen
 	// that have their own border are shown with it
@@ -436,4 +440,11 @@ func (g *game) menuRow(x, y int) (int, bool) {
 	}
 	i := int(float64(y-g.menuRect.Min.Y)/(8*g.menuK)) - g.menuTop
 	return i, i >= 0 && i < len(menu.Items)
+}
+
+func dungeon() *Dungeon {
+	if DungeonView == nil {
+		return nil
+	}
+	return DungeonView()
 }

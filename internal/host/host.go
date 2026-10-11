@@ -40,6 +40,14 @@ type Frame struct {
 	CursorOn   bool
 	CursorAtX  int // where the game's cursor is, in screen pixels (top-down)
 	CursorAtY  int
+	// Overlays are true-colour pictures drawn over the frame (nil Img: none).
+	Overlays []Overlay
+}
+
+// Overlay is a picture drawn at (X, Y) over the frame; transparent where alpha is 0.
+type Overlay struct {
+	X, Y int
+	Img  *image.RGBA
 }
 
 // ShowFrame returns the frame to present. Set by the game.
@@ -159,6 +167,20 @@ func (g *game) Draw(screen *ebiten.Image) {
 	pix := g.rgba.Pix
 	for i, c := range f.Pix[:ScreenW*ScreenH] {
 		copy(pix[i*4:i*4+4], lut[c][:])
+	}
+	for _, o := range f.Overlays {
+		if o.Img == nil {
+			continue
+		}
+		b := o.Img.Bounds()
+		for y := 0; y < b.Dy(); y++ {
+			for x := 0; x < b.Dx(); x++ {
+				c := o.Img.Pix[y*o.Img.Stride+x*4:][:4]
+				if sx, sy := o.X+x, o.Y+y; c[3] != 0 && sx >= 0 && sx < ScreenW && sy >= 0 && sy < ScreenH {
+					copy(pix[(sy*ScreenW+sx)*4:], c)
+				}
+			}
+		}
 	}
 	if f.CursorOn && f.Cursor != nil {
 		for y := 0; y < f.CursorH; y++ {

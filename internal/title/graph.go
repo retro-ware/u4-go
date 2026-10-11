@@ -86,11 +86,12 @@ func clearRows(y0, y1, x, w int) {
 func Gra_2() { clearRows(104, 184, 8, 304) }
 
 // Gra_5 (GR_5_EGA) clears the text area: rows 152..199.
-func Gra_5() { clearRows(152, 200, 0, ega.W) }
+func Gra_5() { clearRows(152, 200, 0, ega.W); c64Clear(152, 200, 0, ega.W) }
 
 // Gra_3 (GR_3_EGA) copies a w (columns) x h block of picture pic from (src_x, src_y) to the
 // screen at (dst_x, dst_y). rand_pts is the CGA routine's.
 func Gra_3(w, h, src_x, src_y int, pic []byte, dst_y, rand_pts, dst_x int) {
+	c64Blit(w, h, src_x, src_y, pic, dst_y, dst_x)
 	for i := 0; i < h; i++ {
 		di := (dst_y+i)*ega.W + dst_x*8
 		si := (src_y+i)*ega.W + src_x*8
@@ -149,6 +150,7 @@ func Gra_inflate(name string, pic []byte) {
 	if C_23C3(name, CB_ega) == -1 {
 		fatalf("can't read %s", name)
 	}
+	c64Inflate(name, pic)
 }
 
 // Gra_init (GR_INIT_EGA): mode 0Dh (screen cleared), the palette (the EGA default:
@@ -187,7 +189,7 @@ func C_208A() uint8 {
 
 func Gra_putchar(c uint8) { drv.PutChar(int(txt_Y), int(txt_X), c) } /*GR_PUTCHAR_EGA*/
 
-func Gra_clrscr() { drv.ClrScr() } /*GR_CLRSCR_EGA*/
+func Gra_clrscr() { drv.ClrScr(); clear(c64Scr.Pix) } /*GR_CLRSCR_EGA*/
 
 // SetVGA switches the title to VGA (or EGA) graphics, its pictures included.
 func SetVGA(on bool) {

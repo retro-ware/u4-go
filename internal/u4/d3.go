@@ -520,3 +520,16 @@ func C_B677() {
 	}
 	C_B61C()
 }
+
+// The modern layout's 3D view reads the level, the party and the light from here.
+func init() { host.DungeonView = dungeonView }
+
+func dungeonView() *host.Dungeon {
+	if CurMode != MOD_DUNGEON {
+		return nil
+	}
+	d := &host.Dungeon{X: int(Party._x), Y: int(Party._y), Dir: int(Party._dir),
+		Lit: Party.f_1dc != 0, Frame: D_8CFA, Tiles: &drv.Tiles}
+	copy(d.Map[:], D_8742._map[int(Party._z&7)*64:])
+	return d
+}

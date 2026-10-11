@@ -105,9 +105,11 @@ func C_273E() {
 	for bp_02 := 1; bp_02 <= 23; bp_02++ {
 		Gra_3(3, bp_02, 0, 152, D_6940, 92-bp_02, -1, 9)
 		Gra_3(3, 24-bp_02, 9, 68, D_6940, 68, -1, 9)
+		c64Gate(27-bp_02*27/23, 27, bp_02&1) // the C64's rises in 27 rows
 		pace(moongateStep)
 	}
 	Gra_3(3, 24, 0, 152, D_6940, 68, -1, 9)
+	c64Gate(0, 27, 0)
 }
 
 /*moongate animation #2*/
@@ -115,9 +117,11 @@ func C_27E0() {
 	for bp_02 := 1; bp_02 <= 23; bp_02++ {
 		Gra_3(3, bp_02, 3, 152, D_6940, 68, -1, 9)
 		Gra_3(3, 24-bp_02, 0, 152, D_6940, bp_02+68, -1, 9)
+		c64Gate(bp_02*27/23, 27, bp_02&1) // the C64's sinks from the top
 		pace(moongateStep)
 	}
 	Gra_3(3, 24, 3, 152, D_6940, 68, -1, 9)
+	c64Gate(0, 0, 0)
 }
 
 // the introduction: texts 1Dh..34h, the pictures changing along the way
@@ -174,6 +178,7 @@ func C_2B2A(bp08, bp06, bp04 int) {
 		src = 1
 	}
 	Gra_3(1, 12, src, 187, D_6940, D_3012[bp04], -1, bp06+16)
+	c64Bead(bp08 == 0, bp06, bp04)
 }
 
 var D_307E = [...]string{
@@ -193,6 +198,7 @@ func C_2B6D(bp06, bp04 int) {
 		dx = 1
 	}
 	Gra_3(12, 124, sx, 12, bp_04, 12, -1, dx)
+	showCard(bp06, bp04, dx)
 }
 
 /*characterisics increments by virtue*/
