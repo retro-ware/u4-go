@@ -570,6 +570,8 @@ func u4_gets(si []byte, bp04 int) { /*C_1445*/
 		if words != nil && loc_A == 0 {
 			ask(pWords)
 			getsWords = words
+		} else {
+			ask(pText)
 		}
 		loc_B = u_kbread()
 		getsWords = nil

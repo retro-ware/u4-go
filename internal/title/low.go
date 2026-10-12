@@ -13,7 +13,7 @@ import (
 var speed_info uint16 /*D_692E*/
 
 func low_init() { /*C_244E*/
-	t := time.Now()
+	t := host.Now()
 	put := func(i int, v uint16) { seed_128[i], seed_128[i+1] = byte(v), byte(v>>8) }
 	dx := uint16(t.Second())<<8 | uint16(t.Nanosecond()/10000000)
 	cx := uint16(t.Hour())<<8 | uint16(t.Minute())

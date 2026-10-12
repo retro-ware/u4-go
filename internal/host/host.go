@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
 
 const (
@@ -105,10 +104,13 @@ func Run(title string, scale int, gameMain func()) error {
 		gameMain()
 	}()
 	g := &game{}
+	theGame = g
 	g.img = ebiten.NewImage(ScreenW, ScreenH)
 	g.rgba = image.NewRGBA(image.Rect(0, 0, ScreenW, ScreenH))
 	return ebiten.RunGame(g)
 }
+
+var theGame *game
 
 type game struct {
 	img  *ebiten.Image
@@ -119,7 +121,8 @@ type game struct {
 	pix                        []byte // the frame's palette indexes, for sampling its border
 	// the modern layout: the map's place on the window, the open menu's
 	world, menuRect        image.Rectangle
-	menuK                  float64
+	menuK, oskK            float64
+	oskRect                image.Rectangle
 	menuTop                int
 	lastMouseX, lastMouseY int
 }
@@ -139,6 +142,7 @@ func (g *game) Update() error {
 	if updateModern() {
 		return nil
 	}
+	KeyPolled = false
 	tick <- struct{}{}
 	<-yielded
 	if finished.Load() {
@@ -225,6 +229,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	op.GeoM.Translate(g.offX, g.offY)
 	op.Filter = ebiten.FilterNearest
 	screen.DrawImage(g.img, op)
+	g.drawUI(screen, max(2, float64(int(g.scaleX/1.6))), sw, sh)
 }
 
 func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
@@ -236,6 +241,3 @@ func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
 func Exit(code int) {
 	os.Exit(code)
 }
-
-// for inpututil, kept referenced
-var _ = inpututil.IsKeyJustPressed

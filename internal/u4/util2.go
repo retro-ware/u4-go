@@ -4,8 +4,6 @@ package u4
 // LOW.ASM (start-up; the speed calibration is host.SpeedInfo).
 
 import (
-	"time"
-
 	"github.com/memmaker/u4-go/internal/host"
 )
 
@@ -117,6 +115,7 @@ func U4_RND2(a int) int { return int(u_rand_b()) & a }
 // u_kbhit counts Party.f_000 and reports a waiting key (dropping ^C), running the view's
 // animation when there is none (C_17C5).
 func u_kbhit() int {
+	host.KeyPolled = true
 	u_rand_a()
 	Party.f_000++
 	if len(host.KeyQueue) > 0 {
@@ -135,6 +134,7 @@ func u_kbread() int {
 	u_delay(0x8081, 0x8081)
 	waiting = true
 	for len(host.KeyQueue) == 0 {
+		host.KeyPolled = true
 		host.Yield()
 	}
 	waiting = false
@@ -156,7 +156,7 @@ func u_kbflush() {
 // ---- LOW.ASM ----
 
 func low_init() { /*C_0012*/
-	t := time.Now()
+	t := host.Now()
 	dx := uint16(t.Second())<<8 | uint16(t.Nanosecond()/10000000)
 	cx := uint16(t.Hour())<<8 | uint16(t.Minute())
 	put := func(i int, v uint16) { seed_128[i], seed_128[i+1] = byte(v), byte(v>>8) }

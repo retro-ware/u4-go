@@ -22,6 +22,8 @@ const (
 	pChara             // AskChara
 	pYN                // AskY_N
 	pWords             // u4_gets with known answers (getsWords)
+	pText              // u4_gets: free text
+	pKeys              // a key read with its own answers (askKeys)
 )
 
 var (
@@ -32,6 +34,8 @@ var (
 	// getsWords are the answers offered for the next u4_gets: set by its caller.
 	getsWords   []string
 	askingChara bool // AskChara is asking through AskLetter
+	// promptItems are pKeys' answers.
+	promptItems []host.MenuItem
 	// histLine is the text window's line being written, for the history.
 	histLine []byte
 )
@@ -48,10 +52,42 @@ func ask(k promptKind) {
 // waiting is set while u_kbread waits for a key.
 var waiting bool
 
-func init() {
+func init() { setHooks() }
+
+// setHooks points the host's menus, clicks and font at the game (the title sets its own).
+func setHooks() {
+	host.Hover = nil
 	host.PromptMenu = promptMenu
 	host.MapClick = mapClick
 	host.Glyphs = func() [][64]byte { return drv.Glyphs[:] }
+	host.BackKey = backKey
+	host.ScreenClick = screenClick
+}
+
+// askKeys tells the host the next key read takes one of items.
+func askKeys(title string, items ...host.MenuItem) {
+	promptText, promptItems = title, items
+	ask(pKeys)
+}
+
+// backKey is what B types: Enter where an empty line cancels, nothing at a command, else Esc.
+func backKey() uint16 {
+	switch prompt {
+	case pWords, pText:
+		return KBD_ENTER
+	case pCmd:
+		return 0
+	}
+	return KBD_ESC
+}
+
+// screenClick turns a click on the original layout's map window into a mapClick.
+func screenClick(x, y int) ([]uint16, bool) {
+	if !host.InWorld || x < 8 || x >= 184 || y < 8 || y >= 184 || CurMode == MOD_DUNGEON {
+		return nil, false
+	}
+	keys, ok := mapClick((x-8)/16-5, (y-8)/16-5)
+	return keys, ok && keys != nil
 }
 
 var talkWords = []string{"Name", "Job", "Health", "Look", "Join", "Give", "Bye"}
@@ -163,7 +199,15 @@ func promptMenu(asked bool) *host.Menu {
 			}
 			m.Items = append(m.Items, item(w, append(keys, KBD_ENTER)...))
 		}
+		m.Items = append(m.Items, host.MenuItem{Label: "Type...", Keyboard: true}, item("(nothing)", KBD_ENTER))
 		return m
+	case pText:
+		if !asked {
+			return nil
+		}
+		return &host.Menu{Items: []host.MenuItem{{Label: "Type...", Keyboard: true}}}
+	case pKeys:
+		return &host.Menu{Title: promptText, Items: promptItems}
 	}
 	return nil
 }
@@ -173,6 +217,7 @@ func promptMenu(asked bool) *host.Menu {
 func letterMenu() *host.Menu {
 	m := &host.Menu{Title: strings.TrimRight(promptText, "\x12\b :?")}
 	name := func(c int) string { return "" }
+	named := promptLo >= 'A' // only the named letters are offered
 	switch {
 	case strings.HasPrefix(promptText, "Spell") || strings.HasPrefix(promptText, "For Spell"):
 		name = func(c int) string {
@@ -211,10 +256,16 @@ func letterMenu() *host.Menu {
 	case promptLo >= 'A':
 		listed := printedChoices()
 		name = func(c int) string { return listed[byte(c)] }
+		named = false // nothing listed: every letter
+		for c := promptLo; c <= promptHi; c++ {
+			if listed[byte(c)] != "" {
+				named = true
+			}
+		}
 	}
 	for c := promptLo; c <= promptHi; c++ {
 		label := name(c)
-		if promptLo >= 'A' && label == "" {
+		if named && label == "" {
 			continue
 		}
 		if label == "" {
@@ -236,7 +287,8 @@ func printedChoices() map[byte]string {
 	h := host.History
 	for i := len(h) - 1; i >= 0 && i >= len(h)-24; i-- {
 		l := strings.TrimSpace(h[i])
-		if len(l) > 2 && l[0] >= 'A' && l[0] <= 'Z' && (l[1] == '-' || l[1] == ':' || l[1] == ')') {
+		if len(l) > 2 && l[0] >= 'A' && l[0] <= 'Z' && (l[1] == '-' || l[1] == ':' || l[1] == ')' ||
+			l[1] == ' ' && l[2] >= 'A' && l[2] <= 'Z') { // "B Cloth" (the armourer)
 			if _, ok := got[l[0]]; !ok {
 				got[l[0]] = strings.TrimSpace(l[2:])
 			}
@@ -300,8 +352,19 @@ func commandItems() []host.MenuItem {
 		when(Party._tile == TIL_14 || Party._tile == TIL_15, "Yell", 'y')
 		when(true, "Ztats", 'z')
 	}
-	return append(m, item("Volume", key('v')), item("Pass", KBD_SPACE))
+	m = append(m, item("Volume", key('v')), item("Pass", KBD_SPACE))
+	all := &host.Menu{Title: "All commands", Pause: true}
+	for i, name := range allCommands {
+		all.Items = append(all.Items, item(name, key(byte('a'+i))))
+	}
+	return append(m, host.MenuItem{Label: "All commands...", Sub: all})
 }
+
+// allCommands are the original's commands, A to Z, for what the context list leaves out.
+var allCommands = []string{"Attack", "Board", "Cast", "Descend", "Enter", "Fire", "Get chest",
+	"Hole up & camp", "Ignite torch", "Jimmy lock", "Klimb", "Locate", "Mix reagents", "New order",
+	"Open door", "Peer at gem", "Quit & save", "Ready weapon", "Search", "Talk", "Use item",
+	"Volume", "Wear armour", "X-it", "Yell", "Ztats"}
 
 // worldContext lists what the party can do with its neighbours and the tile it is on.
 func worldContext() []host.MenuItem {

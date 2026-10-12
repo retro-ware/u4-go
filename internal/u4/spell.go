@@ -304,6 +304,7 @@ func SPL_Energy() { /*C_6882*/
 	var loc_A, loc_C, loc_E int
 
 	u4_puts( /*D_20FE*/ "Energy type? ")
+	askKeys("Energy type", item("Poison", key('p')), item("Lightning", key('l')), item("Fire", key('f')), item("Sleep", key('s')))
 	loc_B = u_kbread() & 0xff
 	u4_toupper(&loc_B)
 	switch loc_B {

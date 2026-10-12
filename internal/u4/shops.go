@@ -478,6 +478,7 @@ func C_CEBE() {
 func shopBuySell() int {
 	var bp_02 int
 	for {
+		askKeys("", item("Buy", key('b')), item("Sell", key('s')), item("Leave", KBD_ESC))
 		bp_02 = int(int8(u_kbread()))
 		switch bp_02 {
 		case 'B', 'b':
@@ -1453,6 +1454,7 @@ func SHP_pub() { /*C_DFAF*/
 		u4_puts(D_5F10[D_9142])
 		u4_puts( /*D_6150*/ " says: What'll it be, Food er Ale?\x12\x12\b")
 		for { /*C_E004*/
+			askKeys("", item("Food", key('f')), item("Ale", key('a')), item("Leave", KBD_ESC))
 			bp_02 = int(int8(u_kbread()))
 			u4_toupper(&bp_02)
 			if bp_02 == ' ' || bp_02 == 0x1b || bp_02 == '\r' {

@@ -15,6 +15,7 @@ func Main() (err error) {
 		}
 	}()
 	resetGlobals()
+	setHooks()
 	main_()
 	return nil
 }

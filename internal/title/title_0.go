@@ -69,6 +69,7 @@ func resetGlobals() {
 	drv.SetMode(ega.VGA)
 	c64Reset()
 	host.ShowFrame = func() *host.Frame { return &frame }
+	setHooks()
 }
 
 // animate the 2 "monsters": callback for u_delay
@@ -423,7 +424,9 @@ func main_() { /*C_0EAA*/
 	}
 	for {
 		mark()
+		askThen(askMain)
 		bp_02 := u_kbread()
+		askThen(askNone)
 		mark()
 		switch bp_02 {
 		case KBD_UP, KBD_DOWN:
@@ -480,6 +483,7 @@ const (
 	KBD_SPACE = 0x3920
 	KBD_ENTER = 0x1c0d
 	KBD_LEFT  = 0x4B00
+	KBD_RIGHT = 0x4D00
 	KBD_UP    = 0x4800
 	KBD_DOWN  = 0x5000
 	KBD_A     = 0x1E61

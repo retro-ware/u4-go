@@ -8,7 +8,6 @@ package host
 import (
 	"image"
 	"image/color"
-	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
@@ -18,6 +17,10 @@ import (
 type MenuItem struct {
 	Label string
 	Keys  []uint16
+	// Keyboard opens the on-screen keyboard instead (free text).
+	Keyboard bool
+	// Sub opens another menu instead.
+	Sub *Menu
 }
 
 // Menu is a list of choices shown over the map.
@@ -54,6 +57,16 @@ var (
 	WideRows = 15
 	// Glyphs returns the game's font, 8x8 palette indexes per character.
 	Glyphs func() [][64]byte
+	// BackKey is the key word the gamepad's B button (back) types for the current prompt
+	// (Esc, or Enter where an empty line cancels); 0: none.
+	BackKey func() uint16
+	// ScreenClick returns the keys a left click at (x, y) of the 320x200 screen types in the
+	// original layout; ok false: the click is not the game's (it opens the prompt's menu or
+	// answers a "press a key" wait).
+	ScreenClick func(x, y int) (keys []uint16, ok bool)
+	// Hover is told where the pointer is on the 320x200 screen when it moves (original
+	// layout, nothing open over the screen).
+	Hover func(x, y int)
 
 	// History is every line the text window showed, oldest first (F5 shows it).
 	History []string
@@ -84,7 +97,23 @@ func AddHistory(s string) {
 var helpText = []string{
 	"Enter / right click   commands & choices",
 	"Click the map         walk / pick a tile",
+	"Click elsewhere       continue / choices",
 	"Arrows, letters       as in the original",
+	"",
+	"Gamepad",
+	"D-pad / left stick    move, pick",
+	"A       confirm, commands & choices",
+	"B       back / cancel",
+	"X       pass (space)",
+	"Y       message history",
+	"Start   command menu",
+	"Back    original layout (F6)",
+	"LB, RB  party, message overlays;",
+	"        page in the history",
+	"L-stick click  this help",
+	"Text (gamepad): A types, B deletes,",
+	"        X space, Start done",
+	"",
 	"F3   party overlay",
 	"F4   message overlay",
 	"F5   message history",
@@ -99,6 +128,22 @@ func openMenu(m *Menu) {
 	if m == nil || len(m.Items) == 0 {
 		return
 	}
+	if !padMode() { // free text is typed on the keyboard
+		var items []MenuItem
+		for _, it := range m.Items {
+			if !it.Keyboard {
+				items = append(items, it)
+			}
+		}
+		if len(items) == 0 {
+			return
+		}
+		m.Items = items
+	}
+	if len(m.Items) == 1 && m.Items[0].Keyboard {
+		openKeyboard()
+		return
+	}
 	m.id = promptID
 	menu = m
 }
@@ -106,7 +151,13 @@ func openMenu(m *Menu) {
 func choose(i int) {
 	m := menu
 	menu = nil
-	if i >= 0 && i < len(m.Items) {
+	switch {
+	case i < 0 || i >= len(m.Items):
+	case m.Items[i].Keyboard:
+		openKeyboard()
+	case m.Items[i].Sub != nil:
+		openMenu(m.Items[i].Sub)
+	default:
 		KeyQueue = append(KeyQueue, m.Items[i].Keys...)
 	}
 }
@@ -133,16 +184,23 @@ func repeating(k ebiten.Key) bool {
 	return d == 1 || d >= TPS/4 && (d-TPS/4)%(TPS/15) == 0
 }
 
-// modernInput handles the modern layout's keys and mouse. It reports whether it used the
-// tick's keyboard input, which then does not reach the game.
-func modernInput(g *game) bool {
+// modernInput handles the modern layout's keys (and the keys of a menu or window the pad or
+// mouse opened in any layout). It reports whether it used the tick's keyboard input, which
+// then does not reach the game.
+func modernInput() bool {
 	if pressed(ebiten.KeyF6) {
 		Modern = !Modern
 		menu, modal = nil, 0
 		return true
 	}
-	if !modern() {
-		menu, modal = nil, 0
+	if osk.open {
+		if pressed(ebiten.KeyEscape) {
+			osk.open = false
+			return true
+		}
+		return false // typing goes to the game as ever
+	}
+	if !modern() && menu == nil && modal == 0 {
 		return false
 	}
 	switch {
@@ -160,44 +218,22 @@ func modernInput(g *game) bool {
 		return true
 	}
 	if modal != 0 {
-		rows := 20
 		switch {
 		case repeating(ebiten.KeyArrowUp):
 			histBack++
 		case repeating(ebiten.KeyArrowDown):
 			histBack--
 		case pressed(ebiten.KeyPageUp):
-			histBack += rows
+			histBack += histRows
 		case pressed(ebiten.KeyPageDown):
-			histBack -= rows
-		case pressed(ebiten.KeyEscape), pressed(ebiten.KeyEnter), pressed(ebiten.KeyF5),
-			inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft),
-			inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight):
+			histBack -= histRows
+		case pressed(ebiten.KeyEscape), pressed(ebiten.KeyEnter), pressed(ebiten.KeyF5):
 			modal = 0
 		}
-		_, wy := ebiten.Wheel()
-		histBack += int(wy * 3)
-		histBack = max(0, min(histBack, len(History)-rows))
 		ebiten.AppendInputChars(nil)
 		return true
 	}
-
-	mx, my := ebiten.CursorPosition()
 	if menu != nil {
-		moved := mx != g.lastMouseX || my != g.lastMouseY
-		g.lastMouseX, g.lastMouseY = mx, my
-		if i, ok := g.menuRow(mx, my); ok {
-			if moved {
-				menu.Sel = i
-			}
-			if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-				choose(i)
-				return true
-			}
-		} else if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-			menu = nil
-			return true
-		}
 		n := len(menu.Items)
 		switch {
 		case repeating(ebiten.KeyArrowUp):
@@ -210,7 +246,7 @@ func modernInput(g *game) bool {
 			menu.Sel = n - 1
 		case pressed(ebiten.KeyEnter), pressed(ebiten.KeyNumpadEnter):
 			choose(menu.Sel)
-		case pressed(ebiten.KeyEscape), inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight):
+		case pressed(ebiten.KeyEscape):
 			menu = nil
 		default:
 			// typing answers the prompt as in the original: the menu steps aside
@@ -221,25 +257,10 @@ func modernInput(g *game) bool {
 		}
 		return true
 	}
-	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight) ||
-		pressed(ebiten.KeyEnter) || pressed(ebiten.KeyNumpadEnter) {
+	if pressed(ebiten.KeyEnter) || pressed(ebiten.KeyNumpadEnter) {
 		if m := PromptMenu(true); m != nil {
 			openMenu(m)
 			return true
-		}
-		return false
-	}
-	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) && g.world.Dx() > 0 {
-		if MapClick != nil {
-			t := float64(g.world.Dx()) / 11
-			dx := int(math.Floor(float64(mx-g.world.Min.X)/t)) - 5
-			dy := int(math.Floor(float64(my-g.world.Min.Y)/t)) - 5
-			keys, ok := MapClick(dx, dy)
-			if ok {
-				KeyQueue = append(KeyQueue, keys...)
-			} else if dx == 0 && dy == 0 {
-				openMenu(PromptMenu(true))
-			}
 		}
 	}
 	return false
@@ -248,6 +269,11 @@ func modernInput(g *game) bool {
 // text paints lines in the game's font into an image, row sel inverted. pad cells of
 // border on every side.
 func (g *game) text(lines []string, sel int, title string) *ebiten.Image {
+	return g.textInv(lines, func(_, y int) bool { return y == sel }, title)
+}
+
+// textInv is text with the cells (x, y) for which inv holds inverted.
+func (g *game) textInv(lines []string, inv func(x, y int) bool, title string) *ebiten.Image {
 	glyphs := Glyphs()
 	w := len(title)
 	for _, l := range lines {
@@ -269,7 +295,10 @@ func (g *game) text(lines []string, sel int, title string) *ebiten.Image {
 			for k := 0; k < 8; k++ {
 				v := gl[r*8+k]
 				rgb := g.lut[v]
-				if inv && v == 0 { // the selection: the letters on the colour of the border's pipe
+				switch {
+				case inv && !InWorld && v == 0: // no play screen to take a colour from
+					rgb = [4]byte{0x40, 0x40, 0xc0, 0xff}
+				case inv && v == 0: // the selection: the letters on the colour of the border's pipe
 					rgb = g.lut[g.pix[3*ScreenW+20]]
 				}
 				o := ((cy*8+r)*w*8 + cx*8 + k) * 4
@@ -291,7 +320,7 @@ func (g *game) text(lines []string, sel int, title string) *ebiten.Image {
 			if x < len(l) {
 				c = l[x]
 			}
-			put(1+x, top+j, c, j == sel)
+			put(1+x, top+j, c, inv(x, j))
 		}
 	}
 	img := ebiten.NewImage(w*8, h*8)
@@ -322,6 +351,15 @@ func (g *game) drawBox(screen, img *ebiten.Image, x, y, k float64) image.Rectang
 	b := img.Bounds()
 	w, h, e := float64(b.Dx())*k, float64(b.Dy())*k, 8*k
 	r := image.Rect(int(x), int(y), int(x+w), int(y+h))
+	if !InWorld { // no play screen border to take the pieces from: a plain frame
+		screen.SubImage(r.Inset(-int(e))).(*ebiten.Image).Fill(color.Gray{0xaa})
+		screen.SubImage(r.Inset(-int(e / 2))).(*ebiten.Image).Fill(color.Black)
+		op := &ebiten.DrawImageOptions{}
+		op.GeoM.Scale(k, k)
+		op.GeoM.Translate(x, y)
+		screen.DrawImage(img, op)
+		return r
+	}
 	screen.SubImage(r).(*ebiten.Image).Fill(color.Black)
 	op := &ebiten.DrawImageOptions{}
 	op.GeoM.Scale(k, k)
@@ -401,15 +439,27 @@ func (g *game) drawModern(screen *ebiten.Image) {
 			fw-136*ok, fh-104*ok, ok)
 	}
 
-	g.menuRect = image.Rectangle{}
+	g.drawUI(screen, ok, sw, sh)
+}
+
+const histRows = 20
+
+// drawUI draws the open window, menu or on-screen keyboard (any layout), k the overlays' scale.
+func (g *game) drawUI(screen *ebiten.Image, ok float64, sw, sh int) {
+	g.menuRect, g.oskRect = image.Rectangle{}, image.Rectangle{}
+	if Glyphs == nil {
+		return
+	}
 	switch {
 	case modal == modalHelp:
-		g.centred(screen, g.text(helpText, -1, "Keys"), ok, sw, sh)
+		g.centred(screen, g.text(helpText, -1, "Keys"), min(ok, float64(sh)*0.95/float64(8*(len(helpText)+3))), sw, sh)
 	case modal == modalHistory:
-		rows := 20
 		end := len(History) - histBack
-		lines := History[max(0, end-rows):max(0, end)]
+		lines := History[max(0, end-histRows):max(0, end)]
 		g.centred(screen, g.text(lines, -1, "Messages (arrows, wheel; Esc)"), ok, sw, sh)
+	case osk.open:
+		g.oskK = ok
+		g.oskRect = g.centred(screen, g.textInv(oskLines(), oskInv, "Type (Start: done)"), ok, sw, sh)
 	case menu != nil:
 		img := g.text(labels(menu), menu.Sel, menu.Title)
 		g.menuK = min(ok, float64(sh)*0.9/float64(img.Bounds().Dy()))

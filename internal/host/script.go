@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Scripted input for testing, from U4GO_INPUT: comma-separated events, each
@@ -23,6 +24,14 @@ import (
 //	g            toggle VGA/EGA graphics (F2)
 //	h:WHAT       the modern layout's input: enter, up, down, esc, f3, f4, f5, f6, or
 //	             tile:DX:DY (a click on the map, relative to the centre tile)
+//	p:BUTTON     a gamepad button press: up down left right a b x y start back lb rb ls
+//	ml:X:Y       a left click at (X, Y) of the 320x200 screen (in the modern layout: of
+//	             its map window, x and y 8..183), through the real mouse handling
+//	mm:X:Y       the pointer moved there (same coordinates as ml)
+//	mr           a right click
+//	mw:N         the wheel turned N notches (negative: down)
+//	mi:N         a click on the open menu's item N
+//	mk:KEY       a click on the on-screen keyboard's key (a character, or aa spc del done)
 //
 // While a script is set, the real mouse and keyboard are ignored.
 
@@ -73,6 +82,8 @@ func runScript() bool {
 		return false
 	}
 	scriptTick++
+	padHeld = [nButtons]int{}
+	ptrLeft, ptrRight, ptrWheel = false, false, 0
 	if scriptHold > 0 {
 		scriptHold--
 		if scriptHold == 0 {
@@ -84,10 +95,12 @@ func runScript() bool {
 		script = script[1:]
 		switch ev.what {
 		case "k":
+			padLast = false
 			if len(ev.args) > 0 {
 				KeyQueue = append(KeyQueue, uint16(ev.args[0]))
 			}
 		case "t":
+			padLast = false
 			for _, r := range ev.raw {
 				for i := 0; i < len(r); i++ {
 					PushChar(r[i])
@@ -110,6 +123,41 @@ func runScript() bool {
 			toggleGraphics()
 		case "h":
 			scriptHost(ev.raw)
+		case "p":
+			if b, ok := buttonNames[strings.ToLower(ev.raw[0])]; ok {
+				padHeld[b] = 1
+				padLast = true
+			}
+		case "ml":
+			if len(ev.args) >= 2 {
+				ptrX, ptrY = theGame.toWindow(ev.args[0], ev.args[1])
+				ptrLeft = true
+			}
+		case "mm":
+			if len(ev.args) >= 2 {
+				ptrX, ptrY = theGame.toWindow(ev.args[0], ev.args[1])
+			}
+		case "mr":
+			ptrRight = true
+		case "mw":
+			if len(ev.args) > 0 {
+				ptrWheel = float64(ev.args[0])
+			}
+		case "mi":
+			if r := theGame.menuRect; len(ev.args) > 0 && !r.Empty() {
+				ptrX = r.Min.X + r.Dx()/2
+				ptrY = r.Min.Y + int((float64(theGame.menuTop+ev.args[0])+0.5)*8*theGame.menuK)
+				ptrLeft = true
+			}
+		case "mk":
+			if r := theGame.oskRect; len(ev.raw) > 0 && !r.Empty() {
+				row, col := oskFind(ev.raw[0])
+				w := cellW(row)
+				k := 8 * theGame.oskK
+				ptrX = r.Min.X + int((float64(1+col*w)+0.5)*k)
+				ptrY = r.Min.Y + int((float64(2+oskLine(row))+0.5)*k)
+				ptrLeft = true
+			}
 		case "s":
 			if len(ev.raw) > 0 {
 				saveShot(ev.raw[0])
@@ -167,6 +215,7 @@ func scriptHost(raw []string) {
 		}
 	case "esc":
 		menu, modal = nil, 0
+		osk.open = false
 	case "f3":
 		ShowStats = !ShowStats
 	case "f4":
@@ -186,4 +235,37 @@ func scriptHost(raw []string) {
 			}
 		}
 	}
+}
+
+// oskFind is the on-screen keyboard's key named k.
+func oskFind(k string) (row, col int) {
+	for c, s := range oskSpecial {
+		if strings.EqualFold(s, k) {
+			return len(oskRows), c
+		}
+	}
+	for r, s := range oskRows {
+		if c := strings.Index(s, strings.ToUpper(k)); c >= 0 {
+			return r, c
+		}
+	}
+	return 0, 0
+}
+
+// toWindow maps (x, y) of the 320x200 screen to window pixels.
+func (g *game) toWindow(x, y int) (int, int) {
+	if modern() && g.world.Dx() > 0 {
+		k := float64(g.world.Dx()) / 176
+		return g.world.Min.X + int((float64(x-8)+0.5)*k), g.world.Min.Y + int((float64(y-8)+0.5)*k)
+	}
+	return int(g.offX + (float64(x)+0.5)*g.scaleX), int(g.offY + (float64(y)+0.5)*g.scaleY)
+}
+
+// Now is the time of day the games seed their random numbers with: fixed while a script
+// runs, so a scripted run plays the same every time.
+func Now() time.Time {
+	if scriptOn {
+		return time.Date(1987, 9, 16, 12, 0, 0, 0, time.UTC)
+	}
+	return time.Now()
 }

@@ -107,6 +107,7 @@ func u_rand_b() uint8 {
 // u_kbhit (C_3241) counts Party.f_000 and reports a waiting key (dropping ^C), running
 // t_callback when there is none.
 func u_kbhit() int {
+	host.KeyPolled = true
 	u_rand_a()
 	Party.f_000++
 	if len(host.KeyQueue) > 0 {
@@ -125,6 +126,7 @@ func u_kbhit() int {
 func u_kbread() int {
 	u_delay(0x8081, 0x8081)
 	for len(host.KeyQueue) == 0 {
+		host.KeyPolled = true
 		host.Yield()
 	}
 	k := host.KeyQueue[0]

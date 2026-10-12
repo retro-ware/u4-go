@@ -277,8 +277,22 @@ func C_2C12() {
 		txt_X = 0
 		txt_Y = 19
 		u4_puts(STR(int(D_30CA[loc_B]) + int(loc_C)))
+		findAnswers() // the port's addition: the answers can be picked in the text
+		drawAnswers()
 		for {
+			askThen(askGypsy)
 			loc_A = u_kbread()
+			askThen(askNone)
+			switch loc_A {
+			case KBD_LEFT, KBD_RIGHT, KBD_UP, KBD_DOWN:
+				answerSel ^= 1
+				drawAnswers()
+				continue
+			case KBD_ENTER:
+				if answerFound {
+					loc_A = []int{KBD_A, KBD_B}[answerSel]
+				}
+			}
 			if u4_isupper(uint8(loc_A)) {
 				loc_A += 'a' - 'A'
 			}
@@ -356,13 +370,16 @@ func C_3030() bool {
 	C_0B1E(17, 4, "in this world and time?")
 	txt_X = 12
 	txt_Y = 19
+	askThen(askName)
 	C_2656(player_name[:], 12)
+	askThen(askNone)
 	if player_name[0] == 0 {
 		pAnim, pShapes = nil, nil
 		return false
 	}
 	Gra_2()
 	C_0B1E(17, 4, "Art thou Male or Female? ")
+	askThen(askSex)
 	M_or_F = int16(uint8(u_kbread()))
 	u4_toupper16(&M_or_F)
 	for M_or_F != 'M' && M_or_F != 'F' {
@@ -370,11 +387,13 @@ func C_3030() bool {
 		M_or_F = int16(uint8(u_kbread()))
 		// quirk: compared with the full key words, Enter and Space never match; only Esc cancels
 		if M_or_F == 0x1b || M_or_F == KBD_ENTER || M_or_F == KBD_SPACE {
+			askThen(askNone)
 			pAnim, pShapes = nil, nil
 			return false
 		}
 		u4_toupper16(&M_or_F)
 	}
+	askThen(askNone)
 	u4_putc(uint8(M_or_F))
 	pAnim, pShapes = nil, nil
 	D_6E80 = 0
