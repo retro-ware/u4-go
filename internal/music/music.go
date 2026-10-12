@@ -183,7 +183,7 @@ func (stream) Read(b []byte) (int, error) {
 		playing = song
 	}
 	player.render(l, r)
-	g := float32(volume) / 10
+	g := float32(volume) / 10 * float32(fader("music")) // and the goplay desk's
 	if muted {
 		g = 0
 	}
