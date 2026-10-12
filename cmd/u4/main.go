@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -128,7 +129,8 @@ func hasAll(files map[string][]byte, names ...string) bool {
 	return true
 }
 
-// writeCover decodes TITLE.EGA into dir/COVER.PNG for goplay's floppy label.
+// writeCover decodes TITLE.EGA into dir/COVER.PNG for goplay's floppy label: the
+// "Ultima IV / Quest of the Avatar" logo alone, centred on black.
 func writeCover(dir string) error {
 	pix, err := title.Picture(filepath.Join(dir, "TITLE.EGA"))
 	if err != nil {
@@ -138,7 +140,11 @@ func writeCover(dir string) error {
 	for _, c := range ega.Palette {
 		pal = append(pal, color.RGBA{c[0]<<2 | c[0]>>4, c[1]<<2 | c[1]>>4, c[2]<<2 | c[2]>>4, 255})
 	}
-	img := &image.Paletted{Pix: pix, Stride: 320, Rect: image.Rect(0, 0, 320, 200), Palette: pal}
+	src := &image.Paletted{Pix: pix, Stride: 320, Rect: image.Rect(0, 0, 320, 200), Palette: pal}
+	logo := image.Rect(41, 33, 281, 93)
+	img := image.NewPaletted(image.Rect(0, 0, 320, 200), pal) // index 0: EGA black
+	at := image.Pt((320-logo.Dx())/2, (200-logo.Dy())/2)
+	draw.Draw(img, logo.Sub(logo.Min).Add(at), src, logo.Min, draw.Src)
 	f, err := os.Create(filepath.Join(dir, "COVER.PNG"))
 	if err != nil {
 		return err
