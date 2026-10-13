@@ -2,6 +2,9 @@ package upgrade
 
 import "testing"
 
+// talkFileSize is a .TLK file's size: 16 people of 288 bytes.
+const talkFileSize = 16 * 288
+
 func TestFiles(t *testing.T) {
 	if len(Shapes) != 256*256 || len(Charset) != 128*64 || len(Palette) != 768 {
 		t.Fatalf("sizes: shapes %d charset %d palette %d", len(Shapes), len(Charset), len(Palette))
@@ -26,7 +29,7 @@ func TestFiles(t *testing.T) {
 		}
 	}
 	for _, n := range []string{"COVE.TLK", "lcb.tlk", "MINOC.TLK", "SKARA.TLK", "YEW.TLK"} {
-		if b, ok := TLK(n); !ok || len(b) != 0x1200 {
+		if b, ok := TLK(n); !ok || len(b) != talkFileSize {
 			t.Errorf("%s: %v %d", n, ok, len(b))
 		}
 	}

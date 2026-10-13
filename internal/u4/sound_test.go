@@ -12,15 +12,15 @@ import (
 // TestSoundEffects checks the beep's pitch and length and, with U4GO_WAV set to a directory,
 // writes each effect there as a WAV to inspect.
 func TestSoundEffects(t *testing.T) {
-	b := effect(1, 0)
+	b := effect(soundBeep, 0)
 	if len(b) != 1 || int(b[0].Hz) != 120 || b[0].Dur.Round(time.Millisecond) != 67*time.Millisecond {
 		t.Fatalf("beep %+v", b)
 	}
-	if e := effect(2, 0); e[0].Hz < 320 || e[0].Hz > 330 || e[0].Dur.Round(time.Millisecond) != 74*time.Millisecond {
-		t.Fatalf("effect 2 %+v", e[0])
+	if e := effect(soundBadCommand, 0); e[0].Hz < 320 || e[0].Hz > 330 || e[0].Dur.Round(time.Millisecond) != 74*time.Millisecond {
+		t.Fatalf("bad command %+v", e[0])
 	}
-	for n := 0; n < 13; n++ {
-		e := effect(n, 0x20)
+	for n := range soundCount {
+		e := effect(n, 32)
 		var d time.Duration
 		lo, hi := 1e9, 0.0
 		for _, x := range e {

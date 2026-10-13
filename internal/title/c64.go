@@ -38,10 +38,10 @@ var (
 
 // pepto is the C64 palette.
 var pepto = [16][3]byte{
-	{0x00, 0x00, 0x00}, {0xff, 0xff, 0xff}, {0x68, 0x37, 0x2b}, {0x70, 0xa4, 0xb2},
-	{0x6f, 0x3d, 0x86}, {0x58, 0x8d, 0x43}, {0x35, 0x28, 0x79}, {0xb8, 0xc7, 0x6f},
-	{0x6f, 0x4f, 0x25}, {0x43, 0x39, 0x00}, {0x9a, 0x67, 0x59}, {0x44, 0x44, 0x44},
-	{0x6c, 0x6c, 0x6c}, {0x9a, 0xd2, 0x84}, {0x6c, 0x5e, 0xb5}, {0x95, 0x95, 0x95},
+	{0, 0, 0}, {255, 255, 255}, {104, 55, 43}, {112, 164, 178},
+	{111, 61, 134}, {88, 141, 67}, {53, 40, 121}, {184, 199, 111},
+	{111, 79, 37}, {67, 57, 0}, {154, 103, 89}, {68, 68, 68},
+	{108, 108, 108}, {154, 210, 132}, {108, 94, 181}, {149, 149, 149},
 }
 
 func setC64(img *image.RGBA, x, y int, c byte) {
@@ -49,17 +49,27 @@ func setC64(img *image.RGBA, x, y int, c byte) {
 		return
 	}
 	p := pepto[c&15]
-	copy(img.Pix[img.PixOffset(x, y):], []byte{p[0], p[1], p[2], 0xff})
+	copy(img.Pix[img.PixOffset(x, y):], []byte{p[0], p[1], p[2], 255})
 }
+
+// A Koala picture: a 2-byte load address, the 8000-byte bitmap (40x25 cells of 8 bytes),
+// 1000 bytes of screen RAM and 1000 of colour RAM (a cell's colours), the background colour.
+const (
+	koalaBitmap     = 2
+	koalaScreenRAM  = koalaBitmap + 8000
+	koalaColorRAM   = koalaScreenRAM + 1000
+	koalaBackground = koalaColorRAM + 1000
+)
 
 // koala decodes the w x rows cells from cell column cx0 of a Koala picture (multicolour:
 // each pixel two wide) into img at (dx, dy).
 func koala(img *image.RGBA, k []byte, cx0, w, rows, dx, dy int) {
-	bitmap, screen, colram, bkg := k[2:8002], k[8002:9002], k[9002:10002], k[10002]
+	bitmap, screenRAM, colorRAM := k[koalaBitmap:koalaScreenRAM], k[koalaScreenRAM:koalaColorRAM], k[koalaColorRAM:koalaBackground]
+	background := k[koalaBackground]
 	for cy := 0; cy < rows; cy++ {
 		for cx := 0; cx < w; cx++ {
 			cell := cy*40 + cx0 + cx
-			cols := [4]byte{bkg, screen[cell] >> 4, screen[cell], colram[cell]}
+			cols := [4]byte{background, screenRAM[cell] >> 4, screenRAM[cell], colorRAM[cell]}
 			for r := 0; r < 8; r++ {
 				b := bitmap[cell*8+r]
 				for p := 0; p < 8; p++ {
@@ -70,8 +80,8 @@ func koala(img *image.RGBA, k []byte, cx0, w, rows, dx, dy int) {
 	}
 }
 
-// storyPic is a story picture: 320x144, black below to the text area (y 152), clear after.
-func storyPic(k []byte) *image.RGBA {
+// koalaStoryPic decodes a story picture: 32204, black below to the text area (y 152), clear after.
+func koalaStoryPic(k []byte) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, ega.W, ega.H))
 	koala(img, k, 0, 40, 18, 0, 0)
 	for y := 144; y < 152; y++ {
@@ -93,15 +103,16 @@ func c64Reset() {
 	frame.Overlays = []host.Overlay{{Img: c64Scr}}
 }
 
-// c64Blit mirrors Gra_3: a w-column x h block of pic from (sx, sy) to (dx, dy), x in columns.
-func c64Blit(w, h, sx, sy int, pic []byte, dy, dx int) {
+// c64Blit mirrors copyPic: a block of cols x rows of pic from (srcCol, srcY) to
+// (dstCol, dstY).
+func c64Blit(pic []byte, srcCol, srcY, cols, rows, dstCol, dstY int) {
 	if len(pic) == 0 || c64Of[&pic[0]] == nil {
 		return
 	}
 	src := c64Of[&pic[0]]
-	for y := 0; y < h; y++ {
-		for x := 0; x < w*8; x++ {
-			c64Copy(src, sx*8+x, sy+y, dx*8+x, dy+y)
+	for y := 0; y < rows; y++ {
+		for x := 0; x < cols*cellSize; x++ {
+			c64Copy(src, srcCol*cellSize+x, srcY+y, dstCol*cellSize+x, dstY+y)
 		}
 	}
 }
@@ -111,19 +122,19 @@ func c64Inflate(name string, pic []byte) {
 	var img *image.RGBA
 	switch name {
 	case "tree.ega":
-		img = storyPic(koaTree)
+		img = koalaStoryPic(koaTree)
 	case "portal.ega":
-		img = storyPic(koaPortal)
+		img = koalaStoryPic(koaPortal)
 	case "outside.ega":
-		img = storyPic(koaOutside)
+		img = koalaStoryPic(koaOutside)
 	case "inside.ega":
-		img = storyPic(koaInside)
+		img = koalaStoryPic(koaInside)
 	case "wagon.ega":
-		img = storyPic(koaWagon)
+		img = koalaStoryPic(koaWagon)
 	case "gypsy.ega":
-		img = storyPic(koaGypsy)
+		img = koalaStoryPic(koaGypsy)
 	case "abacus.ega":
-		img = storyPic(koaAbacus)
+		img = koalaStoryPic(koaAbacus)
 	}
 	c64Of[&pic[0]] = img
 }
@@ -149,7 +160,7 @@ func c64Clear(y0, y1, x, w int) {
 // c64Gate draws the C64's moongate (a shimmering blue sprite, 24x27 at (78, 51)) over the
 // picture: its rows y0..y1, on the even or odd pixels by phase.
 func c64Gate(y0, y1, phase int) {
-	pic := c64Of[&D_6940[0]]
+	pic := c64Of[&storyPic[0]]
 	if pic == nil {
 		return
 	}
@@ -167,7 +178,7 @@ func c64Gate(y0, y1, phase int) {
 // (columns 3 and 27, from row 2), the C64 table around it in the DOS card's place (column
 // col, 96x124 from y 12).
 func showCard(v, side, col int) {
-	if pic := c64Of[&D_6940[0]]; pic != nil {
+	if pic := c64Of[&storyPic[0]]; pic != nil {
 		for y := 12; y < 136; y++ {
 			for x := col * 8; x < col*8+96; x++ {
 				c64Copy(pic, x, y, x, y)

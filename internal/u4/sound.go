@@ -3,7 +3,7 @@ package u4
 // Port of U4_SOUND.ASM: thirteen PC speaker effects. Each is described as square-wave half
 // periods (internal/speaker); their lengths come from the original's delay-loop counts: a
 // count of n passes weighing w simple dec/jnz passes each lasts n*w*passUs/SpeedInfo
-// microseconds (the calibration made speed_info*8000 passes last one 55 ms timer tick). The
+// microseconds (the calibration made speedInfo*8000 passes last one 55 ms timer tick). The
 // game waits for the effect, as the original did.
 
 import (
@@ -39,114 +39,130 @@ func waitFor(d time.Duration) { host.Wait(d) }
 
 func mul8(a, b int) uint16 { return uint16(byte(a)) * uint16(byte(b)) }
 
-// sound plays effect n (cdecl: the effect, then the parameter some effects take).
-func sound(n int, args ...int) { /*C_1D47*/
-	cl := 0
-	if len(args) > 0 {
-		cl = args[0] & 0xff
+// The thirteen speaker effects, named for where the game plays them.
+const (
+	soundStep        = iota // a click: a step, a member moving in combat
+	soundBeep               // the beep: a bump, a refusal, a shop's ring
+	soundBadCommand         // a buzz, then the beep
+	soundMissile            // a falling whistle: something shot or thrown
+	soundMiss               // a short fall: an attack that misses
+	soundMonsterBlow        // a rising whistle: a monster's blow lands
+	soundMonsterHit         // noise: a monster or thing is hit
+	soundMemberHit          // higher noise: a party member is hurt
+	soundFailure            // a falling whine: no party, food stolen, a spell fails
+	soundSweep              // a warble down and up; its parameter sets the pitch
+	soundMagic              // random tones; its parameter sets how many
+	soundRising             // a slow rise: the whirlpool
+	soundFalling            // a slow fall: the twister
+	soundCount
+)
+
+// sound plays an effect and waits for it to finish; soundSweep and soundMagic take a
+// parameter, used as a byte.
+func sound(effectID int, param ...int) { /*C_1D47*/
+	p := 0
+	if len(param) > 0 {
+		p = int(byte(param[0]))
 	}
-	if SoundFlag == 0 || uint(n)&0xff >= 0xd {
+	if soundOn == 0 || effectID < 0 || effectID >= soundCount {
 		return
 	}
-	waitFor(speaker.Play(effect(n, cl)))
+	waitFor(speaker.Play(effect(effectID, p)))
 }
 
-// effect describes effect n with parameter cl.
-func effect(n, cl int) fx {
+// effect describes an effect with its parameter p.
+func effect(effectID, p int) fx {
 	S := host.SpeedInfo
 	e := &fx{}
-	switch n & 0xff {
-	case 0: // C_1D69: a click (an uncalibrated 32h passes)
-		e.half(0x32, 1)
-	case 1: // sound_1: the beep (TITLE.EXE's too)
+	switch effectID {
+	case soundStep: // C_1D69: uncalibrated, 50 passes
+		e.half(50, 1)
+	case soundBeep: // sound_1: the beep (TITLE.EXE's too)
 		*e = append(*e, speaker.Beep...)
-	case 2: // C_1DA8: 48 halves of 0E0h passes (325 Hz, 74 ms), then the beep
-		for i := 0; i < 0x30; i++ {
-			e.half(uint16(0xe0*S), 1)
+	case soundBadCommand: // C_1DA8: 48 halves of 224 passes (325 Hz, 74 ms), then the beep
+		for range 48 {
+			e.half(uint16(224*S), 1)
 		}
 		*e = append(*e, speaker.Beep...)
-	case 3: // C_1EB3: falling
-		for bl := 5; bl < 0x100; bl++ {
-			e.half(mul8(S, bl)>>1, 1.3)
+	case soundMissile: // C_1EB3
+		for step := 5; step < 256; step++ {
+			e.half(mul8(S, step)>>1, 1.3)
 		}
-	case 4: // C_1EFD
-		bl := 0
-		for {
-			e.half(mul8(S, bl)>>1, 1.3)
-			bl = (bl - 1) & 0xff
-			if bl < 0x80 {
-				break
-			}
+	case soundMiss: // C_1EFD: starts at step 0, which is the longest half (0 means 65536)
+		e.half(0, 1.3)
+		for step := 255; step >= 128; step-- {
+			e.half(mul8(S, step)>>1, 1.3)
 		}
-	case 5: // C_1F4A
-		for bl := 0x80; bl < 0x100; bl++ {
-			e.half(mul8(S, bl)>>1, 1.6)
+	case soundMonsterBlow: // C_1F4A
+		for step := 128; step < 256; step++ {
+			e.half(mul8(S, step)>>1, 1.6)
 		}
-	case 6: // C_1E7F: noise
-		for bh := 0; bh < 0xff; bh++ {
-			r := uint16(u_rand_a()&0x7f | 1)
-			cx := uint16(int(r*3) * S)
-			e.half(cx>>2|1, 1)
+	case soundMonsterHit: // C_1E7F
+		for range 255 {
+			r := uint16(randomByte()%128 | 1)
+			passes := uint16(int(r*3) * S)
+			e.half(passes>>2|1, 1)
 		}
-	case 7: // C_1E53: noise
-		for bh := 0; bh < 0xff; bh++ {
-			r := int(u_rand_a()&0x7f | 0x40)
+	case soundMemberHit: // C_1E53
+		for range 255 {
+			r := int(randomByte()%128 | 64)
 			e.half(mul8(r, S)>>1|1, 1.3)
 		}
-	case 8: // C_1F22
-		for bl := 0x80; bl > 0; bl-- {
-			ax := mul8(S, bl)
-			e.half(ax>>1+ax&1, 1.3)
+	case soundFailure: // C_1F22: halves rounded up
+		for step := 128; step > 0; step-- {
+			passes := mul8(S, step)
+			e.half(passes>>1+passes&1, 1.3)
 		}
-	case 9: // C_1DCD: a sweep up and down, cl sets the pitch; uneven halves
-		sp := S>>1 + S&1
-		end := uint16(0x1b * sp)
-		dx := mul8(sp, cl)
-		cx := uint16(sp)
+	case soundSweep: // C_1DCD: pairs of uneven halves, the long one shortening while the
+		// short one grows, then back
+		unit := uint16(S>>1 + S&1)
+		turn := 27 * unit
+		long := mul8(int(unit), p)
+		short := unit
 		phase := func() {
-			for ah := 0; ah < 0x30; ah++ {
-				e.half(dx, 1)
-				e.half(cx, 1)
+			for range 48 {
+				e.half(long, 1)
+				e.half(short, 1)
 			}
 		}
 		for {
 			phase()
-			dx -= uint16(sp)
-			cx += uint16(sp)
-			if cx == end {
+			long -= unit
+			short += unit
+			if short == turn {
 				break
 			}
 		}
 		for {
 			phase()
-			dx += uint16(sp)
-			cx -= uint16(sp)
-			if cx == 0 {
+			long += unit
+			short -= unit
+			if short == 0 {
 				break
 			}
 		}
-	case 10: // C_1F73: cl random tones of 40 halves
+	case soundMagic: // C_1F73: p random tones of 40 halves (0 counts as 256)
 		for {
-			dl := int(u_rand_a()&0x3f) + 0x40
-			dx := mul8(S, dl) << 1
-			for c := 0; c < 0x28; c++ {
-				e.half(dx, 1)
+			step := int(randomByte()%64) + 64
+			passes := mul8(S, step) << 1
+			for range 40 {
+				e.half(passes, 1)
 			}
-			cl = (cl - 1) & 0xff
-			if cl == 0 {
+			p = int(byte(p - 1))
+			if p == 0 {
 				break
 			}
 		}
-	case 11: // C_1FA3: rising
-		for cx := 0x40; cx < 0xc0; cx++ {
-			for ah := 0; ah < 0x14; ah++ {
-				e.half(uint16(cx*S), 1.15)
+	case soundRising: // C_1FA3
+		for step := 64; step < 192; step++ {
+			for range 20 {
+				e.half(uint16(step*S), 1.15)
 			}
 		}
-	case 12: // C_1FCC: falling
-		for cx := 0xc0; cx > 0x40; cx-- {
-			for ah := 0; ah < 0x14; ah++ {
-				e.half(uint16(cx*S), 1.15)
+	case soundFalling: // C_1FCC
+		for step := 192; step > 64; step-- {
+			for range 20 {
+				e.half(uint16(step*S), 1.15)
 			}
 		}
 	}

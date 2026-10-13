@@ -25,9 +25,11 @@ func Half(us float64) Note {
 	return Note{Hz: 1e6 / (2 * us), Dur: time.Duration(us * float64(time.Microsecond))}
 }
 
-// Beep is the error beep (sound_1 in both programs): 16 half periods of 0CAh*3 calibrated
+// Beep is the error beep (sound_1 in both programs): 16 half periods of 202*3 calibrated
 // delay-loop passes (6.875 us each), a 120 Hz buzz of 67 ms.
-var Beep = []Note{{Hz: 1e6 / (2 * 0xca * 3 * 6.875), Dur: 16 * time.Duration(0xca*3*6875) * time.Nanosecond}}
+var Beep = []Note{{Hz: 1e6 / (2 * beepPasses * 6.875), Dur: 16 * time.Duration(beepPasses*6875) * time.Nanosecond}}
+
+const beepPasses = 202 * 3
 
 var (
 	mu      sync.Mutex
@@ -52,8 +54,16 @@ func Start() {
 	p.Play()
 }
 
+// NoteHook, when set, sees every note played (the replay test records them).
+var NoteHook func(Note)
+
 // Play queues notes and returns their total length.
 func Play(notes []Note) time.Duration {
+	if NoteHook != nil {
+		for _, n := range notes {
+			NoteHook(n)
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	pcm = append(pcm, Render(notes)...)

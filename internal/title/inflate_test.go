@@ -18,11 +18,11 @@ func TestInflate(t *testing.T) {
 		t.Skip("no game files")
 	}
 
-	got := make([]byte, 0x8000)
-	C_217E("SHAPES.EGZ", got)
+	got := make([]byte, shapesSize)
+	loadPacked("SHAPES.EGZ", got)
 	if !bytes.Equal(got, want) {
 		t.Fatal("SHAPES.EGZ does not inflate to SHAPES.EGA")
 	}
-	pic := make([]byte, 0x8000)
-	Gra_inflate("TITLE.EGA", pic)
+	pic := make([]byte, picSize)
+	loadPicture("TITLE.EGA", pic)
 }

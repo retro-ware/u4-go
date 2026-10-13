@@ -1,8 +1,8 @@
 package title
 
-// Port of UTIL2.ASM: the delay with the spinning cursor, the random generators, the keyboard,
-// Not ported: the disk and drive calls and the critical (disk) error handler, the port has no
-// disks; C_32CB, a floppy track 9 piracy check, is never called.
+// Port of UTIL2.ASM: the delay with the spinning cursor, the random generators and the
+// keyboard. Not ported: the disk and drive calls and the critical (disk) error handler, the
+// port has no disks; a floppy track 9 piracy check is never called.
 
 import (
 	"time"
@@ -10,77 +10,95 @@ import (
 	"github.com/memmaker/u4-go/internal/host"
 )
 
-var (
-	cursor_rate uint16            /*D_31BC*/
-	D_31BE      uint16            /*D_31BE*/
-	D_31C0      uint16   = 0xffff /*display cursor flag*/
-	seed_128    [16]byte          /*D_6966 random seeds*/
-	D_6E76      uint8             /*cursor state {0, 1, 2, 3}*/
+// BIOS key words: the scan code in the high byte, the character in the low.
+const (
+	keyBackspace     = 14<<8 | '\b'
+	keyCtrlBackspace = 14<<8 | 127
+	keyCtrlC         = 46<<8 | 3
+	keyEscape        = 1<<8 | 27
+	keySpace         = 57<<8 | ' '
+	keyEnter         = 28<<8 | '\r'
+	keyLeft          = 75 << 8
+	keyRight         = 77 << 8
+	keyUp            = 72 << 8
+	keyDown          = 80 << 8
+	keyA             = 30<<8 | 'a'
+	keyB             = 48<<8 | 'b'
+	keyI             = 23<<8 | 'i'
+	keyJ             = 36<<8 | 'j'
+	keyR             = 19<<8 | 'r'
 )
+
+// The text cursor spins through four glyphs.
+const (
+	cursorGlyph  = 28 // the first of the four
+	cursorPhases = 4
+)
+
+var (
+	cursorRate  uint16        // delay passes between turns of the cursor (set by animateMonsters)
+	cursorCount uint16        // cursorRate when the count started
+	cursorShown bool          // the delay shows the spinning cursor
+	cursorPhase uint8         // which of the cursor glyphs shows
+	randomSeed  [16]byte      // the 128-bit random state
+	cursorDue   time.Duration // when the cursor turns next
+)
+
+// forever is a delay that never ends by itself: its end second is never reached.
+const forever = 32897
 
 func dosSeconds() uint16 { return uint16(host.Clock/256) % 60 }
 
 // now is the host clock as a duration.
 func now() time.Duration { return time.Duration(host.Clock) * time.Second / 256 }
 
-var cursorDue time.Duration // when the cursor turns next (D_6E77 counted u_delay passes)
-
-// u_delay waits bp04 seconds; with bp06 set a key ends the wait, and with bp06 & D_31C0 the
-// cursor spins at txt_X/txt_Y.
-func u_delay(bp04, bp06 uint16) { /*C_3149*/
+// delay waits until the clock's second has advanced by seconds, animating the monsters. With
+// byKey a waiting key ends it early and the cursor (when shown) spins at the text position.
+func delay(seconds uint16, byKey bool) { /*C_3149*/
 	cursorDue = 0
-	D_31BE = cursor_rate
-	si := dosSeconds() + bp04
-	if si >= 60 {
-		si -= 60
-		if bp06 == 0 {
-			goto C_318C
-		}
-		if u_kbhit() != 0 {
-			return // C_31E8: no cursor to delete
+	cursorCount = cursorRate
+	end := dosSeconds() + seconds
+	if end >= 60 {
+		end -= 60
+		if byKey && keyWaiting() {
+			return // no cursor drawn yet to delete
 		}
 	}
-C_317D:
-	if bp06 != 0 && u_kbhit() != 0 {
-		goto C_31D9
-	}
-C_318C:
-	t_callback()
-	if bp06&D_31C0 != 0 {
-		if D_31BE == cursor_rate {
-			if now() < cursorDue {
-				goto C_31CD
+	for {
+		if byKey && keyWaiting() {
+			break
+		}
+		animateMonsters()
+		if byKey && cursorShown && (cursorCount != cursorRate || now() >= cursorDue) {
+			if cursorCount == cursorRate {
+				cursorPhase = (cursorPhase + cursorPhases - 1) % cursorPhases
+				putGlyph(cursorGlyph + cursorPhase)
 			}
-			D_6E76 = (D_6E76 - 1) & 3
-			Gra_putchar(D_6E76 + 0x1c)
+			cursorDue = now() + time.Duration(1+cursorRate)*cursorPass
+			cursorCount = cursorRate
 		}
-		// C_31B9: reload the cursor counter
-		cursorDue = now() + time.Duration(1+cursor_rate)*cursorPass
-		D_31BE = cursor_rate
+		host.Yield()
+		if dosSeconds() == end {
+			break
+		}
 	}
-C_31CD:
-	host.Yield()
-	if si != dosSeconds() {
-		goto C_317D
-	}
-C_31D9:
-	if bp06&D_31C0 != 0 {
-		Gra_putchar(' ') // delete cursor
+	if byKey && cursorShown {
+		putGlyph(' ') // delete the cursor
 	}
 }
 
-// u_rand_a (C_31ED): an add-with-carry chain over the 128-bit seed, then a 128-bit increment.
-func u_rand_a() uint8 {
-	s := &seed_128
-	al := s[15]
-	cf := uint16(0)
+// randomByte (C_31ED) adds the 128-bit seed's bytes into each other from the end with
+// carries, then counts the seed up by one.
+func randomByte() uint8 {
+	s := &randomSeed
+	sum := s[15]
+	carry := 0
 	for i := 14; i >= 1; i-- {
-		v := uint16(al) + uint16(s[i]) + cf
-		al = byte(v)
-		cf = v >> 8
-		s[i] = al
+		v := int(sum) + int(s[i]) + carry
+		sum, carry = byte(v), v>>8
+		s[i] = sum
 	}
-	s[0] = byte(uint16(s[0]) + uint16(al) + cf)
+	s[0] = byte(int(s[0]) + int(sum) + carry)
 	for i := 15; i >= 0; i-- {
 		s[i]++
 		if s[i] != 0 {
@@ -90,41 +108,41 @@ func u_rand_a() uint8 {
 	return s[0]
 }
 
-// u_rand_b (C_321E). Its adcs take the caller's carry; the compiled C calls it with the carry
-// clear (after a compare that fails or an and), so they are adds.
-func u_rand_b() uint8 {
-	s := &seed_128
+// quickRandom (C_321E) is a cheaper generator on the seed's first four bytes. (Its
+// add-with-carry instructions take the caller's carry; the compiled C always calls it with
+// the carry clear.)
+func quickRandom() uint8 {
+	s := &randomSeed
 	a := s[3] + s[2]
 	s[2] = a
 	s[1] ^= a
 	a = s[1] + s[0]
-	a = a>>1 | a<<7
+	a = a>>1 | a<<7 // rotate right
 	s[0] = a
 	s[3] = a
 	return a
 }
 
-// u_kbhit (C_3241) counts Party.f_000 and reports a waiting key (dropping ^C), running
-// t_callback when there is none.
-func u_kbhit() int {
+// keyWaiting (C_3241) counts the poll in the party record, stirs the random generator and
+// reports a waiting key; Ctrl-C is dropped. Without a key the monsters get their turn.
+func keyWaiting() bool {
 	host.KeyPolled = true
-	u_rand_a()
-	Party.f_000++
+	randomByte()
+	party.counter++
 	if len(host.KeyQueue) > 0 {
 		k := host.KeyQueue[0]
-		if k != 0x2E03 && k != 0 {
-			return 1
+		if k != keyCtrlC && k != 0 {
+			return true
 		}
-		host.KeyQueue = host.KeyQueue[1:] // remove <CTRL C>
+		host.KeyQueue = host.KeyQueue[1:]
 	}
-	t_callback()
-	return 0
+	animateMonsters()
+	return false
 }
 
-// u_kbread (C_3270) waits for a key (a very long u_delay a key interrupts) and returns its
-// BIOS word.
-func u_kbread() int {
-	u_delay(0x8081, 0x8081)
+// readKey (C_3270) waits for a key (spinning the cursor) and returns its BIOS key word.
+func readKey() int {
+	delay(forever, true)
 	for len(host.KeyQueue) == 0 {
 		host.KeyPolled = true
 		host.Yield()
@@ -134,8 +152,8 @@ func u_kbread() int {
 	return int(k)
 }
 
-func u_kbflush() { /*C_3280*/
-	for u_kbhit() != 0 {
-		u_kbread()
+func flushKeys() { /*C_3280*/
+	for keyWaiting() {
+		readKey()
 	}
 }

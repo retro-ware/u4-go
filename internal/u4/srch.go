@@ -1,338 +1,394 @@
 package u4
 
-// Ports of U4_SRCH.C (searching the world and towns) and U4_SRCH2.C (dungeons).
+// Search: the hidden things of the world and the towns, and the orbs, fountains and stones
+// of the dungeons.
 
-const D_27A6 = "Nothing Here!\n"
+// The rewards of a find.
+const (
+	findKarma      = 5   // honor for every find
+	questItemXP    = 400 // the bell, horn, wheel, skull, book, candle and mystic gear
+	stoneXP        = 200
+	runeXP         = 100
+	mysticCount    = 8 // mystic robes or swords found: one for every member
+	reagentsFound  = 2 // at least, and up to seven more
+	maxReagents    = 99
+	findMoveWindow = 16 // herbs grow back after this many moves
+)
 
-// "You find..." & karma+=5
-func C_8D4B() {
-	u4_puts("You find...\n")
-	karma_inc(&Party._honor, 5)
-	Party.f_1e8 = uint16(Party._moves & 0xf0)
+func sayNothingHere() { printText("Nothing Here!\n") }
+
+// foundSomething tells of a find, honours the finder and remembers when it was.
+func foundSomething() {
+	printText("You find...\n")
+	raiseKarma(&party.karmaHonor, findKarma)
+	party.lastFound = uint16(foundWindow())
 }
 
-// get random amount of reagent (max 99)
-func C_8D6D(bp04 int) {
-	Party._reagents[bp04] += uint16(U4_RND1(7) + 2)
-	if Party._reagents[bp04] > 99 {
-		Party._reagents[bp04] = 99
-		u4_puts("Dropped some!\n")
-		sound(1)
+// foundWindow is the stretch of moves the party is in; one find of herbs per stretch.
+func foundWindow() uint32 { return party.moves / findMoveWindow % 16 * findMoveWindow }
+
+// gatherReagent adds a few of a reagent, dropping what does not fit.
+func gatherReagent(r int) {
+	party.reagents[r] += uint16(randomBits(7) + reagentsFound)
+	if party.reagents[r] > maxReagents {
+		party.reagents[r] = maxReagents
+		printText("Dropped some!\n")
+		sound(soundBeep)
 	}
 }
 
-func moonsOrFound() bool {
-	return Party._trammel|Party._felucca != 0 || Party._moves&0xf0 == uint32(Party.f_1e8)
-}
+// moonsUp says whether either moon is up (not in its new phase).
+func moonsUp() bool { return party.trammel|party.felucca != 0 }
 
-func C_8DAA() {
-	if moonsOrFound() {
-		u4_puts(D_27A6)
+// findHerb: the herbs grow only under the new moons, and not twice in a stretch of moves.
+func findHerb(reagent int, text string) {
+	if moonsUp() || foundWindow() == uint32(party.lastFound) {
+		sayNothingHere()
 		return
 	}
-	C_8D4B()
-	u4_puts("Mandrake Root!\n")
-	C_8D6D(7)
+	foundSomething()
+	printText(text)
+	gatherReagent(reagent)
 }
 
-func C_8DE0() {
-	if moonsOrFound() {
-		u4_puts(D_27A6)
+const (
+	reagentNightshade = 6
+	reagentMandrake   = 7
+)
+
+func findMandrake()   { findHerb(reagentMandrake, "Mandrake Root!\n") }
+func findNightshade() { findHerb(reagentNightshade, "Nightshade!\n") }
+
+// findItem gives the quest item once.
+func findItem(item int, text string) {
+	if hasBit(party.items, item) {
+		sayNothingHere()
 		return
 	}
-	C_8D4B()
-	u4_puts("Nightshade!\n")
-	C_8D6D(6)
+	setBit(&party.items, item)
+	foundSomething()
+	printText(text)
+	addXP(0, questItemXP)
 }
 
-// findItem gives the item with bit st once.
-func findItem(st int, text string) {
-	if TST_MSK(Party.mItems, st) {
-		u4_puts(D_27A6)
+func findBell()   { findItem(itemBell, "The Bell of Courage!\n") }
+func findHorn()   { findItem(itemHorn, "A Silver Horn!\n") }
+func findWheel()  { findItem(itemWheel, "The Wheel from the H.M.S. Cape!\n") }
+func findBook()   { findItem(itemBook, "The Book of Truth!\n") }
+func findCandle() { findItem(itemCandle, "The Candle of Love!\n") }
+
+// findSkull: the skull lies only under the new moons, and is gone once destroyed.
+func findSkull() {
+	if hasBit(party.items, itemSkull) || moonsUp() || hasBit(party.items, itemSkullDestroyed) {
+		sayNothingHere()
 		return
 	}
-	SET_MSK(&Party.mItems, st)
-	C_8D4B()
-	u4_puts(text)
-	XP_inc(0, 400)
+	setBit(&party.items, itemSkull)
+	foundSomething()
+	printText("The Skull of Mondain the Wizard!\n")
+	addXP(0, questItemXP)
 }
 
-func C_8E16() { findItem(ST_BELL, "The Bell of Courage!\n") }
-func C_8E46() { findItem(ST_HORN, "A Silver Horn!\n") }
-func C_8E77() { findItem(ST_WHEEL, "The Wheel from the H.M.S. Cape!\n") }
+// The stones found outdoors: the black under the new moons, the white any time.
+const (
+	stoneWhite = virtueSpirituality
+	stoneBlack = virtueHumility
+)
 
-func C_8EA8() {
-	if TST_MSK(Party.mItems, ST_SKULL) || Party._trammel|Party._felucca != 0 || TST_MSK(Party.mItems, ST_CAST_SKULL) {
-		u4_puts(D_27A6)
+func findBlackStone() {
+	if hasBit(party.stones, stoneBlack) || moonsUp() {
+		sayNothingHere()
 		return
 	}
-	SET_MSK(&Party.mItems, ST_SKULL)
-	C_8D4B()
-	u4_puts("The Skull of Mondain the Wizard!\n")
-	XP_inc(0, 400)
+	setBit(&party.stones, stoneBlack)
+	foundSomething()
+	printText("The Black Stone!\n")
+	addXP(0, stoneXP)
 }
 
-func C_8EE8() {
-	if TST_MSK8(Party.mStones, 7) || Party._trammel|Party._felucca != 0 {
-		u4_puts(D_27A6)
+func findWhiteStone() {
+	if hasBit(party.stones, stoneWhite) {
+		sayNothingHere()
 		return
 	}
-	Party.mStones |= 1 << 7
-	C_8D4B()
-	u4_puts("The Black Stone!\n")
-	XP_inc(0, 200)
+	setBit(&party.stones, stoneWhite)
+	foundSomething()
+	printText("The White Stone!\n")
+	addXP(0, stoneXP)
 }
 
-func C_8F21() {
-	if TST_MSK8(Party.mStones, 6) {
-		u4_puts(D_27A6)
+// useTelescope shows a town's map, chosen by its letter.
+func useTelescope() {
+	printText("You see a knob on the Telescope marked A-P\n")
+	town := askLetter("You Select:"+answerRoom(2), 'A', 'P')
+	if town < 0 {
 		return
 	}
-	Party.mStones |= 1 << 6
-	C_8D4B()
-	u4_puts("The White Stone!\n")
-	XP_inc(0, 200)
+	town -= 'A'
+	Load(townFiles[town], area.tiles[:])
+	showTownMap(false)
+	Load(townFiles[party.loc-1], area.tiles[:])
 }
 
-func C_8F51() { findItem(ST_BOOK, "The Book of Truth!\n") }
-func C_8F81() { findItem(ST_CANDLE, "The Candle of Love!\n") }
-
-// use telescope
-func C_8FB1() {
-	u4_puts("You see a knob on the Telescope marked A-P\n")
-	bp_02 := AskLetter("You Select:\x12\x12\b", 'A', 'P')
-	if bp_02 < 0 {
-		return
-	}
-	bp_02 -= 'A'
-	Load(D_0824[bp_02], D_8742._map[:])
-	C_B9EF(0)
-	Load(D_0824[Party._loc-1], D_8742._map[:])
-}
-
+// anyKarma is nonzero while any virtue is unfinished (karma 0 is a virtue raised to an
+// avatar's).
 func anyKarma() uint16 {
-	return Party._hones | Party._compa | Party._valor | Party._justi |
-		Party._sacri | Party._honor | Party._spiri | Party._humil
+	return party.karmaHonesty | party.karmaCompassion | party.karmaValor | party.karmaJustice |
+		party.karmaSacrifice | party.karmaHonor | party.karmaSpirituality | party.karmaHumility
 }
 
-func C_9027() {
-	if Party._armors[7]|anyKarma() != 0 {
-		u4_puts(D_27A6)
+// The mystic gear is found only by an avatar of all eight virtues, and only once.
+func findMysticArmour() {
+	if party.armors[armorMysticRobe]|anyKarma() != 0 {
+		sayNothingHere()
 		return
 	}
-	Party._armors[7] = 8
-	C_8D4B()
-	u4_puts("Mystic Armour!\n")
-	XP_inc(0, 400)
+	party.armors[armorMysticRobe] = mysticCount
+	foundSomething()
+	printText("Mystic Armour!\n")
+	addXP(0, questItemXP)
 }
 
-func C_9076() {
-	if Party._weapons[15]|anyKarma() != 0 {
-		u4_puts(D_27A6)
+func findMysticWeapons() {
+	if party.weapons[weaponMysticSword]|anyKarma() != 0 {
+		sayNothingHere()
 		return
 	}
-	Party._weapons[15] = 8
-	C_8D4B()
-	u4_puts("Mystic Weapons!\n")
-	XP_inc(0, 400)
+	party.weapons[weaponMysticSword] = mysticCount
+	foundSomething()
+	printText("Mystic Weapons!\n")
+	addXP(0, questItemXP)
 }
 
-var D_2904 = [8][2]uint8{
-	{0x05, 0x01}, {0x06, 0x02}, {0x07, 0x04}, {0x08, 0x08},
-	{0x09, 0x10}, {0x0A, 0x20}, {0x01, 0x40}, {0x0D, 0x80},
+// runeTowns are where each virtue's rune lies.
+var runeTowns = [8]uint16{
+	virtueHonesty:      locMoonglow,
+	virtueCompassion:   locBritain,
+	virtueValor:        locJhelom,
+	virtueJustice:      locYew,
+	virtueSacrifice:    locMinoc,
+	virtueHonor:        locTrinsic,
+	virtueSpirituality: locCastleBritannia,
+	virtueHumility:     locPaws,
 }
 
-func C_90C5() {
-	si := 7
-	for ; si > 0; si-- {
-		if uint16(D_2904[si][0]) == Party._loc {
-			break
-		}
+// findRune gives the rune of the town the party is in.
+func findRune() {
+	virtue := virtueHumility
+	for virtue > virtueHonesty && runeTowns[virtue] != party.loc {
+		virtue--
 	}
-	if D_2904[si][1]&Party.mRunes != 0 {
-		u4_puts(D_27A6)
+	if hasBit(party.runes, virtue) {
+		sayNothingHere()
 		return
 	}
-	Party.mRunes |= D_2904[si][1]
-	C_8D4B()
-	u4_puts("The rune of ")
-	u4_puts(D_1E98[151+si])
-	u4_puts("!\n")
-	XP_inc(0, 100)
+	setBit(&party.runes, virtue)
+	foundSomething()
+	printText("The rune of ")
+	printText(virtueNames[virtue])
+	printText("!\n")
+	addXP(0, runeXP)
 }
 
-type t_05_local struct {
-	_00, _01, _02 uint8
-	_03           func()
+// hiddenThing is something found by searching at a place.
+type hiddenThing struct {
+	loc  uint16
+	x, y uint8
+	find func()
 }
 
-var D_2920 = []t_05_local{
-	{0x00, 0xB6, 0x36, C_8DAA}, // Mandrake root
-	{0x00, 0x64, 0xA5, C_8DAA}, // Mandrake root
-	{0x00, 0x2E, 0x95, C_8DE0}, // Nightshade
-	{0x00, 0xCD, 0x2C, C_8DE0}, // Nightshade
-	{0x00, 0xB0, 0xD0, C_8E16}, // The Bell of Courage!
-	{0x00, 0x2D, 0xAD, C_8E46}, // A Silver Horn!
-	{0x00, 0x60, 0xD7, C_8E77}, // The Wheel from the H.M.S. Cape!
-	{0x00, 0xC5, 0xF5, C_8EA8}, // The Skull of Mondain the Wizard!
-	{0x00, 0xE0, 0x85, C_8EE8}, // The Black Stone!
-	{0x00, 0x40, 0x50, C_8F21}, // The White Stone!
-	{0x02, 0x06, 0x06, C_8F51}, // The Book of Truth!
-	{0x10, 0x16, 0x01, C_8F81}, // The Candle of Love!
-	{0x02, 0x16, 0x03, C_8FB1}, // use Telescope
-	{0x03, 0x16, 0x04, C_9027}, // Mystic Armour!
-	{0x04, 0x08, 0x0F, C_9076}, // Mystic Weapons!
-	{0x05, 0x08, 0x06, C_90C5}, // rune of Honesty
-	{0x06, 0x19, 0x01, C_90C5}, // rune of Compassion
-	{0x07, 0x1E, 0x1E, C_90C5}, // rune of Valor
-	{0x08, 0x0D, 0x06, C_90C5}, // rune of Justice
-	{0x09, 0x1C, 0x1E, C_90C5}, // rune of Sacrifice
-	{0x0A, 0x02, 0x1D, C_90C5}, // rune of Honor
-	{0x01, 0x11, 0x08, C_90C5}, // rune of Spirituality
-	{0x0D, 0x1D, 0x1D, C_90C5}, // rune of Humility
+var hiddenThings = []hiddenThing{
+	{0, 182, 54, findMandrake},
+	{0, 100, 165, findMandrake},
+	{0, 46, 149, findNightshade},
+	{0, 205, 44, findNightshade},
+	{0, 176, 208, findBell},
+	{0, 45, 173, findHorn},
+	{0, 96, 215, findWheel},
+	{0, 197, 245, findSkull},
+	{0, 224, 133, findBlackStone},
+	{0, 64, 80, findWhiteStone},
+	{locLycaeum, 6, 6, findBook},
+	{locCove, 22, 1, findCandle},
+	{locLycaeum, 22, 3, useTelescope},
+	{locEmpathAbbey, 22, 4, findMysticArmour},
+	{locSerpentsHold, 8, 15, findMysticWeapons},
+	{locMoonglow, 8, 6, findRune},
+	{locBritain, 25, 1, findRune},
+	{locJhelom, 30, 30, findRune},
+	{locYew, 13, 6, findRune},
+	{locMinoc, 28, 30, findRune},
+	{locTrinsic, 2, 29, findRune},
+	{locCastleBritannia, 17, 8, findRune},
+	{locPaws, 29, 29, findRune},
 }
 
-func CMD_Search() { /*C_913A*/
-	u4_puts("Search...\n")
-	if CurMode <= MOD_BUILDING && Party.f_1dc != 0 {
-		w_DriftOnly()
+func cmdSearch() {
+	printText("Search...\n")
+	if gameMode <= modeTown && party.flyingOrLight != 0 {
+		sayDriftOnly()
 		return
 	}
-	for _, si := range D_2920 {
-		if uint16(si._00) == Party._loc && si._01 == Party._x && si._02 == Party._y {
-			si._03()
+	for _, h := range hiddenThings {
+		if h.loc == party.loc && h.x == party.x && h.y == party.y {
+			h.find()
 			return
 		}
 	}
-	u4_puts(D_27A6)
+	sayNothingHere()
 }
 
-// ---- U4_SRCH2.C: MODULE SEARCH [dungeon] ----
+// ---- Searching in a dungeon ----
 
-var D_2E04 = [1]string{"\nHmmm--No Effect!\n"}
+func sayNoEffect() { printText("\nHmmm--No Effect!\n") }
 
-func C_B730(bp06, bp04 int) {
-	Gra_11(bp06)
-	sound(7)
-	sound(7)
-	sound(7)
-	Gra_11(bp06)
-	hitChara(bp06, 100*bp04)
+// shockMember flashes the member's line and hurts them by 100 points a level.
+func shockMember(member, levels int) {
+	invertStatusLine(member)
+	sound(soundMemberHit)
+	sound(soundMemberHit)
+	sound(soundMemberHit)
+	invertStatusLine(member)
+	damageMember(member, 100*levels)
 }
 
-// increment characteristic (max 50)
-func C_B770(bp06 *uint16, bp04 int) {
-	*bp06 += uint16(bp04)
-	if int16(*bp06) > 50 {
-		*bp06 = 50
+// raiseStatBy raises a stat, up to maxStat (the stat read as signed, as the original did).
+func raiseStatBy(stat *uint16, amount int) {
+	*stat += uint16(amount)
+	if int16(*stat) > maxStat {
+		*stat = maxStat
 	}
 }
 
-var D_2E6E = [8]int{2, 2, 2, 4, 4, 4, 6, 6} // magical ball hits points
-var D_2E7E = [3][8]int{                     // magical ball characteristic
-	{0, 0, 5, 0, 5, 5, 5, 0},
-	{0, 5, 0, 5, 5, 0, 5, 0},
-	{5, 0, 0, 5, 0, 5, 5, 0},
+// Each dungeon's orb: how hard it shocks (in levels) and which stats it raises.
+type orb struct {
+	shock                          int
+	strength, dexterity, intellect bool
 }
 
-// magical ball
-func C_B795() {
-	u4_puts("\nYou find a Magical Ball...\n")
-	bp_02 := AskChara("Who touches?\x12\x12\b")
-	if bp_02 < 0 {
+const orbBonus = 5
+
+var orbs = [8]orb{
+	locDeceit - locFirstDungeon:   {2, false, false, true},
+	locDespise - locFirstDungeon:  {2, false, true, false},
+	locDestard - locFirstDungeon:  {2, true, false, false},
+	locWrong - locFirstDungeon:    {4, false, true, true},
+	locCovetous - locFirstDungeon: {4, true, true, false},
+	locShame - locFirstDungeon:    {4, true, false, true},
+	locHythloth - locFirstDungeon: {6, true, true, true},
+	locAbyss - locFirstDungeon:    {6, false, false, false},
+}
+
+// askWhoTouches asks for a conscious member; -1 if none.
+func askWhoTouches(question string) int {
+	member := askMember(question)
+	if member < 0 {
+		return -1
+	}
+	if !isConscious(member) {
+		printText("\nDisabled!\n")
+		return -1
+	}
+	return member
+}
+
+func touchOrb() {
+	printText("\nYou find a Magical Ball...\n")
+	member := askWhoTouches("Who touches?" + answerRoom(2))
+	if member < 0 {
 		return
 	}
-	if !isCharaConscious(bp_02) {
-		u4_puts("\nDisabled!\n")
-		return
+	*area.dungeonRoom(int(party.z), int(party.y), int(party.x)) = dngCorridor
+	o := orbs[int(party.loc)-locFirstDungeon]
+	shockMember(member, o.shock)
+	m := &party.members[member]
+	if o.strength {
+		raiseStatBy(&m.strength, orbBonus)
+		printText("Strength + 5\n")
 	}
-	*D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)) = 0
-	l := int(Party._loc) - 0x11
-	C_B730(bp_02, D_2E6E[l])
-	c := &Party.chara[bp_02]
-	if D_2E7E[0][l] != 0 {
-		C_B770(&c._str, 5)
-		u4_puts("Strength + 5\n")
+	if o.dexterity {
+		raiseStatBy(&m.dexterity, orbBonus)
+		printText("Dexterity + 5\n")
 	}
-	if D_2E7E[1][l] != 0 {
-		C_B770(&c._dex, 5)
-		u4_puts("Dexterity + 5\n")
-	}
-	if D_2E7E[2][l] != 0 {
-		C_B770(&c._int, 5)
-		u4_puts("Intelligence + 5\n")
+	if o.intellect {
+		raiseStatBy(&m.intelligence, orbBonus)
+		printText("Intelligence + 5\n")
 	}
 }
 
-// fountain
-func C_B863() {
-	u4_puts("You find a Fountain.\n")
-	bp_02 := AskChara("Who drinks?\x12\x12\b")
-	if bp_02 < 0 {
+// The fountains (the detail of a dngFountain room).
+const (
+	fountainPlain = iota
+	fountainHealing
+	fountainAcid
+	fountainCure
+	fountainPoison
+)
+
+func drinkFountain() {
+	printText("You find a Fountain.\n")
+	member := askWhoTouches("Who drinks?" + answerRoom(2))
+	if member < 0 {
 		return
 	}
-	if !isCharaConscious(bp_02) {
-		u4_puts("\nDisabled!\n")
-		return
-	}
-	c := &Party.chara[bp_02]
-	switch tile_cur & 0xf {
-	case 0:
-		u4_puts(D_2E04[0])
-	case 1:
-		if c._HP[0] == c._HP[1] {
-			u4_puts(D_2E04[0])
+	m := &party.members[member]
+	switch dngDetail(hereTile) {
+	case fountainPlain:
+		sayNoEffect()
+	case fountainHealing:
+		if m.hp == m.maxHP {
+			sayNoEffect()
 		} else {
-			u4_puts("\nAhh-Refreshing!\n")
-			c._HP[0] = c._HP[1]
+			printText("\nAhh-Refreshing!\n")
+			m.hp = m.maxHP
 		}
-	case 2:
-		u4_puts("\nBleck--Nasty!\n")
-		C_B730(bp_02, 1)
-	case 3:
-		if c._stat != 'P' {
-			u4_puts(D_2E04[0])
+	case fountainAcid:
+		printText("\nBleck--Nasty!\n")
+		shockMember(member, 1)
+	case fountainCure:
+		if m.status != statusPoisoned {
+			sayNoEffect()
 		} else {
-			c._stat = 'G'
-			u4_puts("\nHmm--Delicious!\n")
+			m.status = statusGood
+			printText("\nHmm--Delicious!\n")
 		}
-	case 4:
-		if c._stat == 'P' {
-			u4_puts(D_2E04[0])
+	case fountainPoison:
+		if m.status == statusPoisoned {
+			sayNoEffect()
 		} else {
-			c._stat = 'P'
-			u4_puts("\nArgh-Choke-Gasp!\n")
-			C_B730(bp_02, 1)
+			m.status = statusPoisoned
+			printText("\nArgh-Choke-Gasp!\n")
+			shockMember(member, 1)
 		}
 	}
 }
 
-// found stone
-func C_B93F() {
-	l := int(Party._loc) - 0x11
-	if Party._loc == 0x17 || Party._loc == 0x18 || TST_MSK8(Party.mStones, l) {
-		u4_puts("\nYou find Nothing!\n")
+// findDungeonStone: each dungeon but Hythloth and the Abyss hides its virtue's stone on an
+// altar.
+func findDungeonStone() {
+	stone := int(party.loc) - locFirstDungeon
+	if party.loc == locHythloth || party.loc == locAbyss || hasBit(party.stones, stone) {
+		printText("\nYou find Nothing!\n")
 		return
 	}
-	Party.mStones |= 1 << l
-	u4_puts("\nYou find the ")
-	u4_puts(D_0884[l])
-	u4_puts(" stone!\n")
-	karma_inc(&Party._honor, 5)
-	XP_inc(0, 200)
+	setBit(&party.stones, stone)
+	printText("\nYou find the ")
+	printText(colorNames[stone])
+	printText(" stone!\n")
+	raiseKarma(&party.karmaHonor, findKarma)
+	addXP(0, stoneXP)
 }
 
-// (S)earch [dungeon]
-func C_B9B2() {
-	u4_puts("Search...\n")
-	switch tile_cur & 0xf0 {
-	case 0x70:
-		C_B795()
-	case 0x90:
-		C_B863()
-	case 0xB0:
-		C_B93F()
+func cmdSearchDungeon() {
+	printText("Search...\n")
+	switch dngKind(hereTile) {
+	case dngOrb:
+		touchOrb()
+	case dngFountain:
+		drinkFountain()
+	case dngAltar:
+		findDungeonStone()
 	default:
-		u4_puts("\nYou find Nothing!\n")
+		printText("\nYou find Nothing!\n")
 	}
 }

@@ -1,437 +1,444 @@
 package u4
 
-// Port of U4_NPC.C (signed char): NPC movement, outdoor creature spawning and their
-// ranged attacks.
+// The people and monsters moving: in towns they stand, wander or follow the party; outdoors
+// monsters close in and attack, pirate ships sail and fire broadsides, and new monsters
+// appear.
 //
-// u4_abs and u4_sign (C_4FBE, C_4FD7) are defined in d3.go / anim.go; isign wraps u4_sign for
-// ints. MSC pushes call arguments right to left, so where the C passes two u_rand_a()-based
-// arguments in one call the last argument draws the first random number: the Go computes
-// them in that order.
+// Where the original passed two random numbers in one call, its compiler drew the last
+// argument's first; the Go draws them in that order into locals.
 
-var D_1FD8 = "\nAttacked by "
+const attackedBy = "\nAttacked by "
 
-var npcDummy uint8
+// A person's behaviour (peopleTable.behaviour): below behaviourFollow they wander.
+const (
+	behaviourStill  = 0
+	behaviourFollow = 128 // follows the party
+	behaviourAttack = 255 // follows the party and attacks
+)
 
-// npcMap is D_8742._map.x32x32[y][x] with the C's unchecked indexing: out of the 32x32 map
-// (the C reads the NPC table or garbage; C_4E94 discards such values) it gives a scratch byte.
-func npcMap(y, x int) *uint8 {
-	i := y*32 + x
-	if i < 0 || i >= 0x400 {
-		npcDummy = 0
-		return &npcDummy
+var offMapTile uint8
+
+// mapTileAt is the map window's tile (y, x), read as the original did, without bounds
+// checks within the 32x32 map: a row's start or end reads the row next to it. Wholly off
+// the map (where the original read other data, which canMoveTo then ignored) it gives a
+// scratch tile.
+func mapTileAt(y, x int) *uint8 {
+	i := y*windowTiles + x
+	if i < 0 || i >= windowTiles*windowTiles {
+		offMapTile = 0
+		return &offMapTile
 	}
-	return D_8742.x32x32(y, x)
+	return area.townTile(y, x)
 }
 
-// can npc move?
-func C_4E94(bp0a int, bp08, bp06, bp04 uint8) bool { // bp08: new x, bp06: new y
-	if CurMode == MOD_BUILDING {
-		if bp08 >= 32 || bp06 >= 32 {
-			return false
-		}
-	}
-	di := int(D_8742._npc._tile[bp0a])
-	if C_29EF(bp04) {
+// randomSign is -1, 0 or 1 at random.
+func randomSign() int { return signInt(signedByte(randomByte())) }
+
+// canMoveTo says whether person i can move to (x, y), onto tile.
+func canMoveTo(i int, x, y, tile uint8) bool {
+	if gameMode == modeTown && (x >= townTiles || y >= townTiles) {
 		return false
 	}
-	if di != TIL_8C && di != TIL_8E {
-		for si := 31; si >= 0; si-- {
-			if D_8742._npc._tile[si] != 0 &&
-				D_8742._npc._x[si] == bp08 &&
-				D_8742._npc._y[si] == bp06 &&
-				D_8742._npc._tile[si] != TIL_3C {
+	kind := int(area.people.tile[i])
+	if slowProgress(tile) {
+		return false
+	}
+	if kind != tileWhirlpool && kind != tileTwister {
+		people := &area.people
+		for j := len(people.tile) - 1; j >= 0; j-- {
+			if people.tile[j] != 0 && people.x[j] == x && people.y[j] == y && people.tile[j] != tileChest {
 				return false
 			}
 		}
-		if Party._x == bp08 && Party._y == bp06 {
+		if party.x == x && party.y == y {
 			return false
 		}
 	}
-	if di != TIL_80 &&
-		bp08 == D_8742._npc._old_x[bp0a] &&
-		bp06 == D_8742._npc._old_y[bp0a] &&
-		U4_RND1(3) == 0 {
+	// Now and then a person won't step back where they came from.
+	if kind != tilePirateWest && x == area.people.oldX[i] && y == area.people.oldY[i] && randomBits(3) == 0 {
 		return false
 	}
-	if di < TIL_80 {
-		return C_2999(bp04)
+	switch {
+	case kind < tilePirateWest: // people
+		return isWalkable(tile)
+	case kind == tilePirateWest:
+		return tile <= tileMediumWater
+	case kind < tileTwister: // sea monsters
+		return tile <= tileShallowWater
+	case kind == tileTwister, kind == tileBat, kind == tileInsects, kind == tileDaemon, kind == tileDragon, kind == tileBalron:
+		return tile <= tileShallowWater || isWalkable(tile) // they fly
+	case kind == tileZorn, kind == tileGhost:
+		return tile >= tileSwamp && tile != tileEnergyField // through walls
 	}
-	if di < TIL_8E {
-		if di == TIL_80 {
-			return bp04 <= TIL_01
-		}
-		return bp04 <= TIL_02
-	}
-	if di == TIL_8E || di == TIL_94 || di == TIL_B4 || di == TIL_F0 || di == TIL_F8 || di == TIL_FC {
-		return bp04 <= TIL_02 || C_2999(bp04)
-	}
-	if di == TIL_EC || di == TIL_9C {
-		return bp04 >= TIL_03 && bp04 != TIL_45
-	}
-	return C_2999(bp04)
+	return isWalkable(tile)
 }
 
-func C_4FF8(si int, bp06, bp04 uint8) {
-	// quirk: "||" (the move is accepted when either coordinate is in range)
-	if bp06 < 32 || bp04 < 32 {
-		D_8742._npc._old_x[si] = D_8742._npc._x[si]
-		D_8742._npc._x[si] = bp06
-		D_8742._npc._old_y[si] = D_8742._npc._y[si]
-		D_8742._npc._y[si] = bp04
+// moveTownPerson moves person i to (x, y) in a town. The original's test for the town's
+// bounds used "or": a move is taken when either coordinate is in range.
+func moveTownPerson(i int, x, y uint8) {
+	if x < townTiles || y < townTiles {
+		movePerson(i, x, y)
 	}
 }
 
-func C_5036(si int, bp06, bp04 uint8) {
-	D_8742._npc._old_x[si] = D_8742._npc._x[si]
-	D_8742._npc._x[si] = bp06
-	D_8742._npc._old_y[si] = D_8742._npc._y[si]
-	D_8742._npc._y[si] = bp04
+// movePerson moves person i to (x, y), noting where they came from.
+func movePerson(i int, x, y uint8) {
+	people := &area.people
+	people.oldX[i], people.x[i] = people.x[i], x
+	people.oldY[i], people.y[i] = people.y[i], y
 }
 
-// NPC attempts move[MOD_OUTDOORS]
-func C_5062(bp0a, bp08, bp06, bp04 int) {
-	loc_B := D_8742._npc._x[bp0a]
-	loc_A := uint8(bp08 + int(loc_B) - int(D_95A5.x)<<4)
-	loc_D := D_8742._npc._y[bp0a]
-	loc_C := uint8(bp06 + int(loc_D) - int(D_95A5.y)<<4)
-	if loc_A > 31 || loc_C > 31 {
-		if bp04 >= 0 {
-			// right-to-left argument order; 2nd argument is u4_sign of the unsigned
-			// u_rand_a() (never -1): quirk of the original
-			y := isign(int(u_rand_a()))
-			x := isign(sc(u_rand_a()))
-			C_5062(bp0a, x, y, bp04-1)
+// wanderOutdoors moves monster i one tile toward (dx, dy), across or along; if it cannot it
+// tries a random direction, up to tries more times.
+func wanderOutdoors(i, dx, dy, tries int) {
+	x, y := area.people.x[i], area.people.y[i]
+	// Where the move ends in the window (the world wraps round, and so does a byte).
+	wx := x - windowQuarter.x*quarterTiles + uint8(dx)
+	wy := y - windowQuarter.y*quarterTiles + uint8(dy)
+	if wx >= windowTiles || wy >= windowTiles {
+		if tries >= 0 {
+			// The original's second random direction is the sign of an unsigned byte: never
+			// west.
+			ry := signInt(int(randomByte()))
+			rx := randomSign()
+			wanderOutdoors(i, rx, ry, tries-1)
 		}
 		return
 	}
-	if U4_RND1(1) != 0 && bp08 != 0 && C_4E94(bp0a, uint8(int(loc_B)+bp08), loc_D, *npcMap(int(loc_C)-bp06, int(loc_A))) {
-		C_5036(bp0a, uint8(int(loc_B)+bp08), loc_D)
+	across := func() bool { // the move along x
+		if canMoveTo(i, x+uint8(dx), y, *mapTileAt(int(wy)-dy, int(wx))) {
+			movePerson(i, x+uint8(dx), y)
+			return true
+		}
+		return false
+	}
+	if randomBits(1) != 0 && dx != 0 && across() {
 		return
 	}
-	if bp06 != 0 && C_4E94(bp0a, loc_B, uint8(int(loc_D)+bp06), *npcMap(int(loc_C), int(loc_A)-bp08)) {
-		C_5036(bp0a, loc_B, uint8(int(loc_D)+bp06))
+	if dy != 0 && canMoveTo(i, x, y+uint8(dy), *mapTileAt(int(wy), int(wx)-dx)) {
+		movePerson(i, x, y+uint8(dy))
 		return
 	}
-	if C_4E94(bp0a, uint8(int(loc_B)+bp08), loc_D, *npcMap(int(loc_C)-bp06, int(loc_A))) {
-		C_5036(bp0a, uint8(int(loc_B)+bp08), loc_D)
+	if across() {
 		return
 	}
-	if bp04 >= 0 {
-		y := isign(sc(u_rand_a()))
-		x := isign(sc(u_rand_a()))
-		C_5062(bp0a, x, y, bp04-1)
+	if tries >= 0 {
+		ry := randomSign()
+		rx := randomSign()
+		wanderOutdoors(i, rx, ry, tries-1)
 	}
 }
 
-// NPC attempts move[MOD_BUILDING]; bp04: # of tries
-func C_51A7(bp0a, bp08, bp06, bp04 int) {
-	bp_02 := int(D_8742._npc._x[bp0a])
-	bp_04 := int(D_8742._npc._y[bp0a])
-	// The C indexes the map without bounds control; C_4E94 rejects such moves anyway.
-	if U4_RND1(1) != 0 && bp08 != 0 {
-		if C_4E94(bp0a, uint8(bp08+bp_02), uint8(bp_04), *npcMap(bp_04, bp08+bp_02)) {
-			C_4FF8(bp0a, uint8(bp08+bp_02), uint8(bp_04))
+// wanderInTown moves person i one tile toward (dx, dy) in a town, across or along; if the
+// first choice is blocked they stay, else they try random directions, up to tries more
+// times (a follower only once).
+func wanderInTown(i, dx, dy, tries int) {
+	x, y := int(area.people.x[i]), int(area.people.y[i])
+	try := func(nx, ny int) bool {
+		if canMoveTo(i, uint8(nx), uint8(ny), *mapTileAt(ny, nx)) {
+			moveTownPerson(i, uint8(nx), uint8(ny))
+			return true
 		}
+		return false
+	}
+	if randomBits(1) != 0 && dx != 0 {
+		try(x+dx, y)
 		return
 	}
-	if bp06 != 0 {
-		if C_4E94(bp0a, uint8(bp_02), uint8(bp06+bp_04), *npcMap(bp06+bp_04, bp_02)) {
-			C_4FF8(bp0a, uint8(bp_02), uint8(bp06+bp_04))
-		}
+	if dy != 0 {
+		try(x, y+dy)
 		return
 	}
-	if C_4E94(bp0a, uint8(bp08+bp_02), uint8(bp_04), *npcMap(bp_04, bp08+bp_02)) {
-		C_4FF8(bp0a, uint8(bp08+bp_02), uint8(bp_04))
+	if try(x+dx, y) {
 		return
 	}
-	if D_8742._npc._var[bp0a] != 0x80 && bp04 >= 0 {
-		y := isign(sc(u_rand_a()))
-		x := isign(sc(u_rand_a()))
-		C_51A7(bp0a, x, y, bp04-1)
+	if area.people.behaviour[i] != behaviourFollow && tries >= 0 {
+		ry := randomSign()
+		rx := randomSign()
+		wanderInTown(i, rx, ry, tries-1)
 	}
 }
 
-// move NPCs[MOD_BUILDING]
-func C_5293() {
-	for si := 31; si >= 0; si-- {
-		if D_8742._npc._tile[si] != 0 && D_8742._npc._var[si] != 0 {
-			if sc(D_8742._npc._var[si]) >= 0 {
-				// random mode
-				if U4_RND1(1) != 0 {
-					y := isign(sc(u_rand_a()))
-					x := isign(sc(u_rand_a()))
-					C_51A7(si, x, y, 2)
-				}
-			} else {
-				// following mode
-				dx := sc(Party._x - D_8742._npc._x[si])
-				dy := sc(Party._y - D_8742._npc._y[si])
-				bp_02 := isign(dx)
-				bp_04 := isign(dy)
-				if u4_abs(dx)+u4_abs(dy) >= 2 {
-					C_51A7(si, bp_02, bp_04, 2)
-				} else if D_8742._npc._var[si] == 0xff {
-					// agressive mode
-					// -- attacked by --
-					t_callback()
-					u4_puts(D_1FD8)
-					u4_puts(C_1513(D_8742._npc._tile[si]))
-					Gra_CR()
-					C_7DFE(si)
-				}
-			}
-		}
-	}
-}
-
-// creature/party distance ?: x sign, y sign, x distance, y distance
-func C_535B(bp0c int, bp0a, bp08, bp06, bp04 *int) int {
-	*bp04 = sc(Party._y - D_8742._npc._y[bp0c])
-	*bp08 = isign(*bp04)
-	*bp06 = sc(Party._x - D_8742._npc._x[bp0c])
-	*bp0a = isign(*bp06)
-	return u4_abs(*bp06) + u4_abs(*bp04)
-}
-
-func C_53AF(si int, bp06, bp04 uint8) {
-	if C_4E94(si, bp06, bp04, *npcMap(int(bp04)-int(D_95A5.y)*16, int(bp06)-int(D_95A5.x)*16)) {
-		if C_2A5A(uint16(D_8742._npc._gtile[si] & 3)) {
-			D_8742._npc._old_x[si] = D_8742._npc._x[si]
-			D_8742._npc._x[si] = bp06
-			D_8742._npc._old_y[si] = D_8742._npc._y[si]
-			D_8742._npc._y[si] = bp04
-		}
-	} else {
-		D_8742._npc._gtile[si] = uint8((isign(sc(u_rand_a()))+int(D_8742._npc._gtile[si]))&3) | TIL_80
-	}
-}
-
-func C_5443(si int) {
-	var loc_A, loc_B, loc_C, loc_D int
-	n := &D_8742._npc
-
-	if C_535B(si, &loc_A, &loc_B, &loc_C, &loc_D) > 5 || U4_RND1(3) == 0 {
-		if u4_abs(loc_C) < u4_abs(loc_D) {
-			if loc_D >= 0 {
-				n._gtile[si] = TIL_83
-			} else {
-				n._gtile[si] = TIL_81
-			}
-		} else {
-			if loc_C >= 0 {
-				n._gtile[si] = TIL_82
-			} else {
-				n._gtile[si] = TIL_80
-			}
-		}
-	} else if n._gtile[si] == TIL_80 {
-		C_53AF(si, n._x[si]-1, n._y[si])
-	} else if n._gtile[si] == TIL_81 {
-		C_53AF(si, n._x[si], n._y[si]-1)
-	} else if n._gtile[si] == TIL_82 {
-		C_53AF(si, n._x[si]+1, n._y[si])
-	} else {
-		C_53AF(si, n._x[si], n._y[si]+1)
-	}
-}
-
-func C_5500(si, bp06, bp04 int) {
-	n := &D_8742._npc
-	if n._gtile[si] == TIL_80 {
-		if bp06 < 0 {
-			C_53AF(si, uint8(int(n._x[si])+bp06), n._y[si])
-			return
-		}
-	} else if n._gtile[si] == TIL_81 {
-		if bp04 < 0 {
-			C_53AF(si, n._x[si], uint8(int(n._y[si])+bp04))
-			return
-		}
-	} else if n._gtile[si] == TIL_82 {
-		if bp06 > 0 {
-			C_53AF(si, uint8(int(n._x[si])+bp06), n._y[si])
-			return
-		}
-	} else {
-		if bp04 > 0 {
-			C_53AF(si, n._x[si], uint8(int(n._y[si])+bp04))
-			return
-		}
-	}
-	C_5443(si)
-}
-
-// bp08, bp06: direction as the C's unsigned chars (-1 = 255)
-func C_5569(bp0a int, bp08, bp06, bp04 uint8) int {
-	loc_E := D_8742._npc._x[bp0a] + bp08
-	loc_A := D_8742._npc._y[bp0a] + bp06
-	sound(3)
-	for loc_C := 1; loc_C <= 3; loc_C++ {
-		if Party._x == loc_E && Party._y == loc_A {
-			return 1
-		}
-		if loc_B := C_0A58(31, loc_E, loc_A); loc_B != -1 {
-			sound(6)
-			if loc_B >= 8 || U4_RND1(3) == 0 {
-				D_8742._npc._tile[loc_B] = 0
-				D_8742._npc._gtile[loc_B] = 0
-			}
-			return 0
-		}
-		si := npcMap(int(loc_A)-int(D_95A5.y)*16, int(loc_E)-int(D_95A5.x)*16)
-		loc_D := *si
-		*si = bp04
-		t_callback()
-		*si = loc_D
-		loc_E += bp08
-		loc_A += bp06
-	}
-	return 0
-}
-
-func C_564B(bp0a, bp08, bp06 int, bp04 uint8) {
-	if C_5569(bp0a, uint8(bp08), uint8(bp06), bp04) == 0 {
-		hit_tile = 0
-		return
-	}
-	t_callback()
-	hit_x = 5
-	hit_y = 5
-	hit_tile = TIL_4F
-	C_36C7()
-	C_1584()
-	hit_tile = 0
-	t_callback()
-}
-
-// (the C passes 3 arguments to the 4-argument C_564B; TIL_4D is the projectile)
-func C_568F(bp08, bp06, bp04 int) {
-	if D_8742._npc._gtile[bp08] == TIL_80 || D_8742._npc._gtile[bp08] == TIL_82 {
-		if bp06 != 0 {
-			C_5500(bp08, bp06, bp04)
-		} else {
-			C_564B(bp08, bp06, bp04, TIL_4D)
-		}
-	} else {
-		if bp04 != 0 {
-			C_5500(bp08, bp06, bp04)
-		} else {
-			C_564B(bp08, bp06, bp04, TIL_4D)
-		}
-	}
-}
-
-func C_56D3(bp04 int) bool {
-	// signed int compares: a negative offset counts as in range
-	return int(D_8742._npc._x[bp04])-int(D_95A5.x)*16 >= 32 ||
-		int(D_8742._npc._y[bp04])-int(D_95A5.y)*16 >= 32
-}
-
-// move NPCs[MOD_OUTDOORS]
-func C_5712() {
-	var loc_A, loc_B, loc_C, loc_D int
-
-	for loc_F := 7; loc_F >= 0; loc_F-- {
-		var loc_G int
-
-		loc_H := int(D_8742._npc._tile[loc_F])
-		if loc_H == 0 {
+// moveTownPeople lets a town's people wander or follow the party; those who attack and
+// stand next to it start a fight.
+func moveTownPeople() {
+	people := &area.people
+	for i := len(people.tile) - 1; i >= 0; i-- {
+		if people.tile[i] == 0 || people.behaviour[i] == behaviourStill {
 			continue
 		}
-		// is out of range?
-		if C_56D3(loc_F) {
-			D_8742._npc._tile[loc_F] = 0
-			D_8742._npc._gtile[loc_F] = 0
+		if people.behaviour[i] < behaviourFollow {
+			if randomBits(1) != 0 {
+				ry := randomSign()
+				rx := randomSign()
+				wanderInTown(i, rx, ry, 2)
+			}
 			continue
 		}
-		if loc_H != TIL_8C && loc_H != TIL_8E {
-			loc_G = C_535B(loc_F, &loc_A, &loc_B, &loc_C, &loc_D)
-			if loc_G < 2 {
-				// -- attacked by --
-				t_callback()
-				u4_puts(D_1FD8)
-				u4_puts(C_1513(uint8(loc_H)))
-				Gra_CR()
-				C_7DFE(loc_F)
+		distX := signedByte(party.x - people.x[i])
+		distY := signedByte(party.y - people.y[i])
+		if abs(distX)+abs(distY) >= 2 {
+			wanderInTown(i, signInt(distX), signInt(distY), 2)
+		} else if people.behaviour[i] == behaviourAttack {
+			redraw()
+			printText(attackedBy)
+			printText(creatureName(people.tile[i]))
+			newLine()
+			startCombat(i)
+		}
+	}
+}
+
+// towardParty is the way from person i to the party: its direction (each -1, 0 or 1), its
+// distances along x and y and the sum of their sizes.
+func towardParty(i int) (dirX, dirY, distX, distY, dist int) {
+	distY = signedByte(party.y - area.people.y[i])
+	distX = signedByte(party.x - area.people.x[i])
+	return signInt(distX), signInt(distY), distX, distY, abs(distX) + abs(distY)
+}
+
+// sailPirate sails pirate ship i ahead to (x, y) when the wind allows, or when blocked
+// turns it at random.
+func sailPirate(i int, x, y uint8) {
+	people := &area.people
+	// Unlike wanderOutdoors this doesn't wrap round the world.
+	tile := *mapTileAt(int(y)-int(windowQuarter.y)*quarterTiles, int(x)-int(windowQuarter.x)*quarterTiles)
+	if !canMoveTo(i, x, y, tile) {
+		facing := (randomSign() + int(people.baseTile[i])) % 4 // the tile's low bits are its direction
+		people.baseTile[i] = uint8(facing&3) | tilePirateWest
+		return
+	}
+	if windAllows(uint16(people.baseTile[i] % 4)) {
+		movePerson(i, x, y)
+	}
+}
+
+// steerPirate turns pirate ship i toward the party when far (or one time in four), else
+// sails it ahead.
+func steerPirate(i int) {
+	people := &area.people
+	_, _, distX, distY, dist := towardParty(i)
+	if dist > 5 || randomBits(3) == 0 {
+		switch {
+		case abs(distX) < abs(distY) && distY >= 0:
+			people.baseTile[i] = tilePirateSouth
+		case abs(distX) < abs(distY):
+			people.baseTile[i] = tilePirateNorth
+		case distX >= 0:
+			people.baseTile[i] = tilePirateEast
+		default:
+			people.baseTile[i] = tilePirateWest
+		}
+		return
+	}
+	x, y := people.x[i], people.y[i]
+	switch people.baseTile[i] {
+	case tilePirateWest:
+		sailPirate(i, x-1, y)
+	case tilePirateNorth:
+		sailPirate(i, x, y-1)
+	case tilePirateEast:
+		sailPirate(i, x+1, y)
+	default:
+		sailPirate(i, x, y+1)
+	}
+}
+
+// chaseParty sails pirate ship i on when it faces the party's way (dirX, dirY), else steers.
+func chaseParty(i, dirX, dirY int) {
+	people := &area.people
+	x, y := people.x[i], people.y[i]
+	switch people.baseTile[i] {
+	case tilePirateWest:
+		if dirX < 0 {
+			sailPirate(i, x+uint8(dirX), y)
+			return
+		}
+	case tilePirateNorth:
+		if dirY < 0 {
+			sailPirate(i, x, y+uint8(dirY))
+			return
+		}
+	case tilePirateEast:
+		if dirX > 0 {
+			sailPirate(i, x+uint8(dirX), y)
+			return
+		}
+	default:
+		if dirY > 0 {
+			sailPirate(i, x, y+uint8(dirY))
+			return
+		}
+	}
+	steerPirate(i)
+}
+
+// fireMissile flies missile from person i toward (dx, dy), up to three tiles; it reports
+// whether it reached the party. A person in the way is hit instead, and gone (a monster
+// one time in four).
+func fireMissile(i int, dx, dy, missile uint8) bool {
+	x := area.people.x[i] + dx
+	y := area.people.y[i] + dy
+	sound(soundMissile)
+	for range 3 {
+		if party.x == x && party.y == y {
+			return true
+		}
+		if hit := personAt(31, x, y); hit != -1 {
+			sound(soundMonsterHit)
+			if hit >= 8 || randomBits(3) == 0 {
+				area.people.tile[hit] = 0
+				area.people.baseTile[hit] = 0
+			}
+			return false
+		}
+		tile := mapTileAt(int(y)-int(windowQuarter.y)*quarterTiles, int(x)-int(windowQuarter.x)*quarterTiles)
+		under := *tile
+		*tile = missile
+		redraw()
+		*tile = under
+		x += dx
+		y += dy
+	}
+	return false
+}
+
+// shootAtParty fires missile from person i toward (dx, dy), hurting the party if it hits.
+func shootAtParty(i, dx, dy int, missile uint8) {
+	if !fireMissile(i, uint8(dx), uint8(dy), missile) {
+		hitTile = 0
+		return
+	}
+	redraw()
+	hitX, hitY = viewCenter, viewCenter
+	hitTile = tileHitFlash
+	drawView()
+	damageParty()
+	hitTile = 0
+	redraw()
+}
+
+// pirateAttack fires pirate ship i's broadside when the party is abeam, else chases it.
+func pirateAttack(i, dirX, dirY int) {
+	facing := area.people.baseTile[i]
+	abeam := dirY == 0
+	if facing == tilePirateWest || facing == tilePirateEast {
+		abeam = dirX == 0
+	}
+	if abeam {
+		shootAtParty(i, dirX, dirY, tileMissile)
+	} else {
+		chaseParty(i, dirX, dirY)
+	}
+}
+
+// outOfWindow says whether monster i is past the window's east or south edge (above or
+// left of it counts as in).
+func outOfWindow(i int) bool {
+	return int(area.people.x[i])-int(windowQuarter.x)*quarterTiles >= windowTiles ||
+		int(area.people.y[i])-int(windowQuarter.y)*quarterTiles >= windowTiles
+}
+
+// moveMonsters moves the world's monsters (the first eight people): those next to the
+// party attack, pirates hunt it, some breathe fire from afar, the rest close in, and the
+// good ones, whirlpools and twisters wander.
+func moveMonsters() {
+	people := &area.people
+	for i := 7; i >= 0; i-- {
+		kind := int(people.tile[i])
+		if kind == 0 {
+			continue
+		}
+		if outOfWindow(i) {
+			people.tile[i] = 0
+			people.baseTile[i] = 0
+			continue
+		}
+		var dirX, dirY, distX, distY, dist int
+		if kind != tileWhirlpool && kind != tileTwister {
+			dirX, dirY, distX, distY, dist = towardParty(i)
+			if dist < 2 {
+				redraw()
+				printText(attackedBy)
+				printText(creatureName(uint8(kind)))
+				newLine()
+				startCombat(i)
 				continue
 			}
 		}
-		if loc_H == TIL_80 {
-			if loc_G < 4 {
-				C_568F(loc_F, loc_A, loc_B)
+		if kind == tilePirateWest {
+			if dist < 4 {
+				pirateAttack(i, dirX, dirY)
 			} else {
-				C_5500(loc_F, loc_A, loc_B)
+				chaseParty(i, dirX, dirY)
 			}
 			continue
 		}
-		if loc_H == TIL_88 || loc_H == TIL_E8 || loc_H >= TIL_F4 {
-			if u4_abs(loc_C) < 5 && u4_abs(loc_D) < 5 && U4_RND1(1) != 0 {
-				C_564B(loc_F, loc_A, loc_B, TIL_4F)
-			}
+		breathesFire := kind == tileSeaSerpent || kind == tileLavaLizard || kind >= tileHydra
+		if breathesFire && abs(distX) < 5 && abs(distY) < 5 && randomBits(1) != 0 {
+			shootAtParty(i, dirX, dirY, tileHitFlash)
 		}
-		if loc_H == TIL_8C || loc_H == TIL_8E || (C_0AFE(uint8(loc_H)) != 0 && U4_RND1(3) != 0) {
-			y := isign(sc(u_rand_a()))
-			x := isign(sc(u_rand_a()))
-			C_5062(loc_F, x, y, 1)
+		if kind == tileWhirlpool || kind == tileTwister || (isGoodCreature(uint8(kind)) && randomBits(3) != 0) {
+			ry := randomSign()
+			rx := randomSign()
+			wanderOutdoors(i, rx, ry, 1)
 		} else {
-			C_5062(loc_F, loc_A, loc_B, 2)
+			wanderOutdoors(i, dirX, dirY, 2)
 		}
 	}
 }
 
-// move npc?
-func C_5834() {
-	if CurMode == MOD_BUILDING {
-		C_5293()
-	} else if CurMode == MOD_OUTDOORS {
-		C_5712()
+// movePeople moves the people of a town or the world.
+func movePeople() {
+	switch gameMode {
+	case modeTown:
+		moveTownPeople()
+	case modeOutdoors:
+		moveMonsters()
 	}
 }
 
-// spawn creatures?
-func C_5851() {
-	if CurMode != MOD_OUTDOORS || U4_RND1(15) != 0 {
+// spawnMonsters now and then sets a new monster in one of the four first free places, out
+// of the party's sight: at sea a sea monster or pirate, on land a monster the stronger the
+// longer the game has gone on.
+func spawnMonsters() {
+	if gameMode != modeOutdoors || randomBits(15) != 0 {
 		return
 	}
-	n := &D_8742._npc
-	for si := 3; si >= 0; si-- {
-		if n._tile[si] != 0 {
+	people := &area.people
+	for i := 3; i >= 0; i-- {
+		if people.tile[i] != 0 {
 			continue
 		}
-		loc_A := uint8(U4_RND1(31))
-		loc_C := uint8(U4_RND1(31))
-		loc_B := D_8742.x32x32(int(loc_C), int(loc_A))
-		if u4_abs(int(loc_A)-int(D_959C.x)) >= 6 && u4_abs(int(loc_C)-int(D_959C.y)) >= 6 {
-			if *loc_B < TIL_02 { // at sea
-				if U4_RND1(7) == 0 {
-					n._x[si] = uint8(int(loc_A) + int(D_95A5.x)*16)
-					n._y[si] = uint8(int(loc_C) + int(D_95A5.y)*16)
-					n._gtile[si] = uint8(TIL_80 + U4_RND1(7)*2)
-					n._tile[si] = n._gtile[si]
-					if n._gtile[si] == TIL_82 {
-						n._gtile[si] = TIL_80
-						n._tile[si] = TIL_80
-					}
-				}
-			} else if *loc_B >= TIL_04 && *loc_B < TIL_08 { // on earth
-				var bp_0a int
-
-				n._x[si] = uint8(int(loc_A) + int(D_95A5.x)*16)
-				n._y[si] = uint8(int(loc_C) + int(D_95A5.y)*16)
-				if Party._moves > 100000 {
-					bp_0a = 15
-				} else if Party._moves < 10000 {
-					bp_0a = 3
-				} else if Party._moves < 20000 {
-					bp_0a = 7
-				} else if Party._moves >= 30000 {
-					bp_0a = 15
-				} else {
-					bp_0a = 7
-				}
-				n._gtile[si] = uint8(U4_RND1(U4_RND1(bp_0a))*4 + TIL_C0)
-				n._tile[si] = n._gtile[si]
+		wx, wy := uint8(randomBits(31)), uint8(randomBits(31))
+		tile := *area.townTile(int(wy), int(wx))
+		if abs(int(wx)-int(windowPos.x)) < 6 || abs(int(wy)-int(windowPos.y)) < 6 {
+			continue
+		}
+		worldX := uint8(int(wx) + int(windowQuarter.x)*quarterTiles)
+		worldY := uint8(int(wy) + int(windowQuarter.y)*quarterTiles)
+		switch {
+		case tile < tileShallowWater: // at sea
+			if randomBits(7) != 0 {
+				continue
 			}
+			people.x[i], people.y[i] = worldX, worldY
+			kind := uint8(tilePirateWest + randomBits(7)*2)
+			if kind == tilePirateEast {
+				kind = tilePirateWest
+			}
+			people.baseTile[i], people.tile[i] = kind, kind
+		case tile >= tileGrass && tile < tileMountains: // on land
+			people.x[i], people.y[i] = worldX, worldY
+			mask := 15 // the kinds of land monsters that may appear, of 16
+			switch {
+			case party.moves < 10000:
+				mask = 3
+			case party.moves < 30000:
+				mask = 7
+			}
+			kind := uint8(randomBits(randomBits(mask))*4 + tileOrc)
+			people.baseTile[i], people.tile[i] = kind, kind
 		}
 	}
 }

@@ -1,727 +1,666 @@
 package u4
 
-// Port of U4_SPELL.C (unsigned char): casting spells.
+// Casting spells.
 
-/*spells m.p. cost*/
-var D_208C = [26]uint8{
-	5,  /*Awaken*/
-	15, /*Blink*/
-	5,  /*Cure*/
-	20, /*Dispel*/
-	10, /*Energy*/
-	15, /*Fireball*/
-	40, /*Gate*/
-	10, /*Heal*/
-	20, /*Iceball*/
-	30, /*Jinx*/
-	25, /*Kill*/
-	5,  /*Light*/
-	5,  /*Magic Misl*/
-	20, /*Negate*/
-	5,  /*Open*/
-	15, /*Protection*/
-	20, /*Quickness*/
-	45, /*Resurrect*/
-	15, /*Sleep*/
-	30, /*Tremor*/
-	15, /*Undead*/
-	15, /*View*/
-	10, /*Winds*/
-	15, /*X-it*/
-	10, /*Y-up*/
-	5,  /*Z-down*/
+// The spells, A to Z.
+const (
+	spellAwaken = iota
+	spellBlink
+	spellCure
+	spellDispel
+	spellEnergy
+	spellFireball
+	spellGate
+	spellHeal
+	spellIceball
+	spellJinx
+	spellKill
+	spellLight
+	spellMagicMissile
+	spellNegate
+	spellOpen
+	spellProtection
+	spellQuickness
+	spellResurrect
+	spellSleep
+	spellTremor
+	spellUndead
+	spellView
+	spellWinds
+	spellXit
+	spellYup
+	spellZdown
+	spellCount
+)
+
+// spellCost is the magic points each spell takes.
+var spellCost = [spellCount]uint8{
+	spellAwaken:       5,
+	spellBlink:        15,
+	spellCure:         5,
+	spellDispel:       20,
+	spellEnergy:       10,
+	spellFireball:     15,
+	spellGate:         40,
+	spellHeal:         10,
+	spellIceball:      20,
+	spellJinx:         30,
+	spellKill:         25,
+	spellLight:        5,
+	spellMagicMissile: 5,
+	spellNegate:       20,
+	spellOpen:         5,
+	spellProtection:   15,
+	spellQuickness:    20,
+	spellResurrect:    45,
+	spellSleep:        15,
+	spellTremor:       30,
+	spellUndead:       15,
+	spellView:         15,
+	spellWinds:        10,
+	spellXit:          15,
+	spellYup:          10,
+	spellZdown:        5,
 }
 
-var D_8CCC int /*current spell*/
+// castingSpell is the spell being cast.
+var castingSpell int
 
-// spellScratch stands in for the bytes the C reads/writes when a map index runs off the
-// map (negative combat index, or past the town map): those are never valid tiles for the
-// spell, so a fresh 0 byte gives the same "Failed!".
-var spellScratch uint8
+// castPitch is added to the spell's number for the pitch of its casting sound.
+const castPitch = 96
 
-// spellMap returns the map byte at a flat index of D_8742._map, or the scratch byte.
-func spellMap(idx int) *uint8 {
-	if idx < 0 || idx >= len(D_8742._map) {
-		spellScratch = 0
-		return &spellScratch
+// Lasting spells (jinx, negate, protection, quickness) hold this many turns; light lasts
+// lightTurns.
+const (
+	lastingTurns = 10
+	lightTurns   = 100
+)
+
+// noTile is what an off-map look finds: never a field, never walkable.
+var noTile uint8
+
+// mapTileFlat is the town or world window's tile at (y, x) as the original found it, by a
+// flat index into the 32x32 map: a step off the left or right edge lands on the row above
+// or below. Off the top or bottom it read memory that is never a field; that reads noTile.
+func mapTileFlat(y, x int) *uint8 {
+	i := y*townTiles + x
+	if i < 0 || i >= len(area.tiles) {
+		noTile = 0
+		return &noTile
 	}
-	return &D_8742._map[idx]
+	return &area.tiles[i]
 }
 
-// spellCombatMap is Combat_MAP that tolerates a negative index (C reads the bytes before the map).
-func spellCombatMap(y, x int) *uint8 {
-	if y*11+x < 0 {
-		spellScratch = 0
-		return &spellScratch
+// combatTileFlat is the battlefield's tile at (y, x) by a flat index, the same way.
+func combatTileFlat(y, x int) *uint8 {
+	if y*viewSize+x < 0 {
+		noTile = 0
+		return &noTile
 	}
-	return Combat_MAP(y, x)
+	return combatTile(y, x)
 }
 
-/*isUndead?*/
-func C_636D(bp04 int) int {
-	if bp04 == TIL_9C || bp04 == TIL_BC || bp04 == TIL_C4 || bp04 == TIL_E4 {
-		return 1
+// isUndead says whether the monster tile is one of the undead.
+func isUndead(tile uint8) bool {
+	return tile == tileGhost || tile == tilePhantom || tile == tileSkeleton || tile == tileLiche
+}
+
+func spellFailed() {
+	printText("Failed!\n")
+	hitTile = 0
+	sound(soundFailure)
+}
+
+// castIt spends the spell's magic points, with its sound and flash; false (and failure)
+// under a negate spell.
+func castIt() bool {
+	cost := spellCost[castingSpell]
+	party.members[activeMember].mp -= uint16(cost)
+	sound(soundMagic, int(cost))
+	invertMap()
+	sound(soundSweep, castingSpell+castPitch)
+	invertMap()
+	if activeSpell == effectNegate {
+		spellFailed()
+		return false
 	}
-	return 0
+	return true
 }
 
-func w_Failed() { /*C_6399*/
-	u4_puts( /*D_20A6*/ "Failed!\n")
-	hit_tile = 0
-	sound(8)
-}
-
-/*try "cast"*/
-/*
-	.consume m.p
-	.check 'N'egate
-*/
-func C_63B4() int {
-	Party.chara[activeChara]._MP -= uint16(D_208C[D_8CCC])
-	sound(10, int(D_208C[D_8CCC]))
-	Gra_09()
-	sound(9, D_8CCC+0x60)
-	Gra_09()
-	if spell_sta == 'N' {
-		w_Failed()
-		return 0
+// onlyIn fails the spell with complaint unless where holds.
+func onlyIn(where bool, complaint string) bool {
+	if !where {
+		printText(complaint)
+		spellFailed()
 	}
-	return 1
+	return where
 }
 
-/*assert outdoors only*/
-func C_6409() int {
-	if CurMode != MOD_OUTDOORS {
-		u4_puts( /*D_20AF*/ "Outdoors Only!\n")
-		w_Failed()
-		return 0
+func outdoorsOnly() bool { return onlyIn(gameMode == modeOutdoors, "Outdoors Only!\n") }
+func combatOnly() bool   { return onlyIn(gameMode >= modeCombat, "Combat Only!\n") }
+func dungeonOnly() bool  { return onlyIn(gameMode == modeDungeon, "Dungeon Only!\n") }
+
+// The damage of the missile spells: a random part, with bits always set.
+func missileDamage(tile uint16) int {
+	switch tile {
+	case tileMissile:
+		return randomBelow(64) | 16
+	case tileMagicSphere:
+		return randomBelow(224) | 32
+	case tileHitFlash:
+		return randomBelow(128) | 24
+	default: // kill
+		return 232
 	}
-	return 1
 }
 
-/*assert combat only*/
-func C_6428() int {
-	if CurMode < MOD_COMBAT {
-		u4_puts( /*D_20BF*/ "Combat Only!\n")
-		w_Failed()
-		return 0
-	}
-	return 1
-}
-
-/*assert dungeon only*/
-func C_6447() int {
-	if CurMode != MOD_DUNGEON {
-		u4_puts( /*D_20CD*/ "Dungeon Only!\n")
-		w_Failed()
-		return 0
-	}
-	return 1
-}
-
-/*magic projectile ?*/
-func C_6466(bp04 int) {
-	var loc_C, loc_D int
-	var loc_A, loc_B int
-
-	if C_6428() == 0 {
+// castMissile flies a spell's missile from the active member in a direction until it hits
+// a monster.
+func castMissile(tile uint16) {
+	if !combatOnly() {
 		return
 	}
-	AskDir( /*D_20DC*/ "Dir: ", &loc_A, &loc_B)
-	if loc_A|loc_B == 0 {
+	dx, dy := askDirection("Dir: ")
+	if dx|dy == 0 || !castIt() {
 		return
 	}
-	if C_63B4() == 0 {
+	hitTile = tile
+	hitX = battlefield.memberX[activeMember]
+	hitY = battlefield.memberY[activeMember]
+	monster := -1
+	for advanceHit(uint8(dx), uint8(dy)) {
+		drawCombat()
+		if monster = monsterAt(hitX, hitY); monster != -1 {
+			break
+		}
+	}
+	if monster == -1 {
+		spellFailed()
 		return
 	}
-	hit_tile = uint16(bp04)
-	hit_x = Combat._charaX[activeChara]
-	hit_y = Combat._charaY[activeChara]
-	loc_C = -1
+	sound(soundMonsterHit)
+	damage := missileDamage(hitTile)
+	hitTile = 0
+	damageMonster(monster, int(activeMember), damage)
+}
+
+// changeStatus sets a member's status from one to another, failing if it was not from.
+func changeStatus(member int, from, to uint8) bool {
+	if party.members[member].status != from {
+		spellFailed()
+		return false
+	}
+	party.members[member].status = to
+	return true
+}
+
+func castAwaken() {
+	m := askMember("Who:" + answerRoom(2))
+	if m < 0 || !castIt() || !changeStatus(m, statusAsleep, statusGood) {
+		return
+	}
+	if gameMode >= modeCombat {
+		fighters.memberTile[m] = uint8(memberShape(m))
+		memberFrame[m] = fighters.memberTile[m]
+	}
+}
+
+// blinkCorner: the original's test lets no blink start where x and y share both top bits
+// (the south-east corner of the world).
+const blinkCorner = 192
+
+func castBlink() {
+	if party.tile < tileHorseWest || party.tile == tileBalloon { // only on foot or horse
+		spellFailed()
+		return
+	}
+	if !outdoorsOnly() {
+		return
+	}
+	dx, dy := askDirection("Dir: ")
+	if dx|dy == 0 || !castIt() {
+		return
+	}
+	if party.x&party.y >= blinkCorner {
+		spellFailed()
+		return
+	}
+	// Out to the edge of the window, then back to the farthest walkable place.
+	x, y := int(windowPos.x), int(windowPos.y)
+	for x >= 0 && x < windowTiles && y >= 0 && y < windowTiles {
+		x += dx
+		y += dy
+	}
 	for {
-		if COM_CheckHitable(uint8(loc_A), uint8(loc_B)) == 0 {
-			break
-		}
-		C_3C54()
-		loc_C = COM_GetFighterId(hit_x, hit_y)
-		if loc_C != -1 {
+		x -= dx
+		y -= dy
+		if x == int(windowPos.x) && y == int(windowPos.y) || isWalkable(*area.townTile(y, x)) {
 			break
 		}
 	}
-	if loc_C == -1 {
-		w_Failed()
+	if x == int(windowPos.x) && y == int(windowPos.y) {
+		spellFailed()
 		return
 	}
-	sound(6)
-	switch hit_tile {
-	case TIL_4D:
-		loc_D = U4_RND3(64) | 16
-	case TIL_4E:
-		loc_D = U4_RND3(224) | 32
-	case TIL_4F:
-		loc_D = U4_RND3(128) | 24
+	party.x += uint8(x) - windowPos.x
+	party.y += uint8(y) - windowPos.y
+	centerMap()
+}
+
+func castCure() {
+	m := askMember("Who:" + answerRoom(2))
+	if m >= 0 && castIt() {
+		changeStatus(m, statusPoisoned, statusGood)
+	}
+}
+
+// roomAhead is the dungeon room in front of the party.
+func roomAhead() *uint8 {
+	return area.dungeonRoom(int(party.z), aheadY(int(party.y), int(party.dir)), aheadX(int(party.x), int(party.dir)))
+}
+
+func isField(tile uint8) bool { return tile >= tilePoisonField && tile <= tileSleepField }
+
+// memberSpot is the active member's place on the battlefield.
+func memberSpot() (x, y int) {
+	return int(battlefield.memberX[activeMember]), int(battlefield.memberY[activeMember])
+}
+
+func castDispel() {
+	if gameMode == modeDungeon {
+		if !castIt() {
+			return
+		}
+		if room := roomAhead(); dngKind(*room) == dngField {
+			*room = dngCorridor
+		} else {
+			spellFailed()
+		}
+		return
+	}
+	if gameMode <= modeTown && party.flyingOrLight != 0 {
+		spellFailed()
+		return
+	}
+	dx, dy := askDirection("Dir: ")
+	if dx|dy == 0 || !castIt() {
+		return
+	}
+	var target *uint8
+	ground := hereTile
+	switch {
+	case gameMode >= modeCombat:
+		x, y := memberSpot()
+		if y+dy >= viewSize || x+dx >= viewSize {
+			spellFailed()
+			return
+		}
+		target = combatTileFlat(y+dy, x+dx)
+		ground = *combatTile(y, x)
+	case gameMode == modeOutdoors:
+		target = mapTileFlat(int(windowPos.y)+dy, int(windowPos.x)+dx)
 	default:
-		loc_D = 224 | 8
+		if int(party.y)+dy >= townTiles || int(party.x)+dx >= townTiles {
+			spellFailed()
+			return
+		}
+		target = mapTileFlat(int(party.y)+dy, int(party.x)+dx)
 	}
-	hit_tile = 0
-	COM_DoDamage(loc_C, int(activeChara), uint8(loc_D))
+	if !isField(*target) {
+		spellFailed()
+		return
+	}
+	*target = ground // the field gives way to the ground the caster stands on
 }
 
-func SPL_Awaken() { /*C_6558*/
-	si := AskChara( /*D_20E2*/ "Who:\x12\x12\b")
-	if si < 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if Party.chara[si]._stat != 'S' {
-		w_Failed()
-		return
-	}
-	Party.chara[si]._stat = 'G'
-	if CurMode >= MOD_COMBAT {
-		Fighters._chtile[si] = uint8(C_0ACF(si))
-		D_944A[si] = Fighters._chtile[si]
-	}
-}
-
-func SPL_Blink() { /*C_65AA*/
-	var loc_A, loc_B int
-	var loc_C, loc_D uint8
-
-	if Party._tile >= TIL_14 && Party._tile != TIL_18 {
-		if C_6409() == 0 {
-			return
-		}
-		AskDir( /*D_20EA*/ "Dir: ", &loc_A, &loc_B)
-		if loc_A|loc_B == 0 {
-			return
-		}
-		if C_63B4() == 0 {
-			return
-		}
-		if Party._x&Party._y < 0xc0 {
-			loc_C = D_959C.x
-			loc_D = D_959C.y
-			for loc_C < 32 && loc_D < 32 {
-				loc_C = uint8(int(loc_C) + loc_A)
-				loc_D = uint8(int(loc_D) + loc_B)
-			}
-			for {
-				loc_C = uint8(int(loc_C) - loc_A)
-				loc_D = uint8(int(loc_D) - loc_B)
-				if !((loc_C != D_959C.x || loc_D != D_959C.y) && !C_2999(*D_8742.x32x32(int(loc_D), int(loc_C)))) {
-					break
-				}
-			}
-			if D_959C.x != loc_C || D_959C.y != loc_D {
-				Party._x += loc_C - D_959C.x
-				Party._y += loc_D - D_959C.y
-				C_26B6()
-				return
-			}
-		}
-	}
-	w_Failed()
-}
-
-func SPL_Cure() { /*C_669B*/
-	si := AskChara( /*D_20F0*/ "Who:\x12\x12\b")
-	if si < 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if Party.chara[si]._stat != 'P' {
-		w_Failed()
-		return
-	}
-	Party.chara[si]._stat = 'G'
-}
-
-func SPL_Dispel() { /*C_66DA*/
-	var loc_A, loc_B int
-	var loc_C *uint8
-
-	if CurMode == MOD_DUNGEON {
-		if C_63B4() == 0 {
-			return
-		}
-		loc_C = D_8742.x8x8x8(int(Party._z), DNG_Y_p(int(Party._y), int(Party._dir)), DNG_X_p(int(Party._x), int(Party._dir)))
-		if *loc_C&0xf0 != 0xa0 {
-			w_Failed()
-			return
-		}
-		*loc_C = 0
-		return
-	}
-	if CurMode <= MOD_BUILDING && Party.f_1dc != 0 {
-		w_Failed()
-		return
-	}
-	AskDir( /*D_20F8*/ "Dir: ", &loc_A, &loc_B)
-	if loc_A|loc_B == 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if CurMode >= MOD_COMBAT {
-		cy, cx := int(Combat._charaY[activeChara]), int(Combat._charaX[activeChara])
-		if cy+loc_B >= 11 || cx+loc_A >= 11 {
-			w_Failed()
-			return
-		}
-		loc_C = spellCombatMap(cy+loc_B, cx+loc_A)
-		if *loc_C < TIL_44 || *loc_C > TIL_47 {
-			w_Failed()
-			return
-		}
-		*loc_C = *Combat_MAP(cy, cx)
-		return
-	}
-	if CurMode == MOD_OUTDOORS {
-		loc_C = spellMap((int(D_959C.y)+loc_B)*32 + int(D_959C.x) + loc_A)
-	} else {
-		if int(Party._y)+loc_B >= 32 || int(Party._x)+loc_A >= 32 {
-			w_Failed()
-			return
-		}
-		loc_C = spellMap((int(Party._y)+loc_B)*32 + int(Party._x) + loc_A)
-	}
-	if *loc_C < TIL_44 || *loc_C > TIL_47 {
-		w_Failed()
-		return
-	}
-	*loc_C = tile_cur
-}
-
-func SPL_Energy() { /*C_6882*/
-	var loc_D *uint8
-	var loc_B int
-	var loc_A, loc_C, loc_E int
-
-	u4_puts( /*D_20FE*/ "Energy type? ")
+func castEnergy() {
+	printText("Energy type? ")
 	askKeys("Energy type", item("Poison", key('p')), item("Lightning", key('l')), item("Fire", key('f')), item("Sleep", key('s')))
-	loc_B = u_kbread() & 0xff
-	u4_toupper(&loc_B)
-	switch loc_B {
-	case 'P' /*oison*/ :
-		loc_E = TIL_44
-	case 'L' /*ightning*/ :
-		loc_E = TIL_45
-	case 'F' /*ire*/ :
-		loc_E = TIL_46
-	case 'S' /*leep*/ :
-		loc_E = TIL_47
+	letter := keyChar(readKey())
+	if letter >= 'a' && letter <= 'z' {
+		letter -= 'a' - 'A'
+	}
+	var field uint8
+	switch letter {
+	case 'P':
+		field = tilePoisonField
+	case 'L':
+		field = tileEnergyField
+	case 'F':
+		field = tileFireField
+	case 'S':
+		field = tileSleepField
 	default:
-		loc_E = -1
-	}
-	if loc_E == -1 {
-		w_Failed()
+		spellFailed()
 		return
 	}
-	u4_putc(loc_B)
-	Gra_CR()
-	if CurMode == MOD_DUNGEON {
-		if C_63B4() == 0 {
+	printChar(letter)
+	newLine()
+	if gameMode == modeDungeon {
+		if !castIt() {
 			return
 		}
-		loc_D = D_8742.x8x8x8(int(Party._z), DNG_Y_p(int(Party._y), int(Party._dir)), DNG_X_p(int(Party._x), int(Party._dir)))
-		if *loc_D != 0 {
-			w_Failed() // quirk: no return, the field is overwritten anyway
+		room := roomAhead()
+		if *room != dngCorridor {
+			spellFailed() // quirk: the field is laid anyway
 		}
-		*loc_D = uint8(loc_E&3 | 0xa0)
+		*room = dngField + field - tilePoisonField
 		return
 	}
-	if CurMode >= MOD_COMBAT {
-		AskDir( /*D_210C*/ "Dir: ", &loc_A, &loc_C)
-		if loc_A|loc_C == 0 {
+	if gameMode >= modeCombat {
+		dx, dy := askDirection("Dir: ")
+		if dx|dy == 0 || !castIt() {
 			return
 		}
-		if C_63B4() == 0 {
-			return
-		}
-		if int(Combat._charaY[activeChara])+loc_C < 11 && int(Combat._charaX[activeChara])+loc_A < 11 {
-			loc_D = spellCombatMap(loc_C+int(Combat._charaY[activeChara]), loc_A+int(Combat._charaX[activeChara]))
-			if C_2999(*loc_D) {
-				*loc_D = uint8(loc_E)
+		x, y := memberSpot()
+		if y+dy < viewSize && x+dx < viewSize {
+			if target := combatTileFlat(y+dy, x+dx); isWalkable(*target) {
+				*target = field
 				return
 			}
 		}
 	}
-	w_Failed()
+	spellFailed()
 }
 
-func SPL_Fireball() { /*C_69D7*/
-	C_6466(TIL_4F)
+func castFireball() { castMissile(tileHitFlash) }
+
+func castGate() {
+	if party.tile < tileHorseWest || party.tile == tileBalloon {
+		spellFailed()
+		return
+	}
+	if !outdoorsOnly() {
+		return
+	}
+	phase := askLetter("To Phase:"+answerRoom(2), '0', '8')
+	if phase < 0 || phase == '0' || !castIt() {
+		return
+	}
+	gate := phase - '1'
+	party.x = moongateX[gate]
+	party.y = moongateY[gate]
+	centerMap()
 }
 
-func SPL_Gate() { /*C_69E5*/
-	if Party._tile < TIL_14 || Party._tile == TIL_18 {
-		w_Failed()
+func castHeal() {
+	m := askMember("Who?" + answerRoom(2))
+	if m < 0 || !castIt() {
 		return
 	}
-	if C_6409() == 0 {
+	if !isAlive(m) {
+		spellFailed()
 		return
 	}
-	si := AskLetter( /*D_2112*/ "To Phase:\x12\x12\b", '0', '8')
-	if si < 0 || si == '0' {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	si -= '1'
-	Party._x = D_0814[si]
-	Party._y = D_081C[si]
-	C_26B6()
+	healMember(m, randomBelow(25)+75)
 }
 
-func SPL_Heal() { /*C_6A40*/
-	si := AskChara( /*D_211F*/ "Who?\x12\x12\b")
-	if si < 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if !isCharaAlive(si) {
-		w_Failed()
-		return
-	}
-	HP_inc(si, U4_RND3(25)+75)
-}
+func castIceball() { castMissile(tileMagicSphere) }
 
-func SPL_Iceball() { /*C_6A82*/
-	C_6466(TIL_4E)
-}
-
-func SPL_Jinx() { /*C_6A90*/
-	if C_63B4() == 0 {
-		return
-	}
-	spell_sta = 'J'
-	spell_cnt = 10
-}
-
-func SPL_Kill() { /*C_6AA9*/
-	C_6466(TIL_8C)
-}
-
-func SPL_Light() { /*C_6AB7*/
-	if C_6447() == 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	Party.f_1dc += 100
-	if CurMode == MOD_DUNGEON {
-		C_AE41()
+// castLasting starts a spell that holds some turns.
+func castLasting(spell uint8) {
+	if castIt() {
+		activeSpell = spell
+		spellTurns = lastingTurns
 	}
 }
 
-func SPL_MagicMisl() { /*C_6ADB*/
-	C_6466(TIL_4D)
+func castJinx() { castLasting(effectJinx) }
+func castKill() { castMissile(tileWhirlpool) }
+
+func castLight() {
+	if !dungeonOnly() || !castIt() {
+		return
+	}
+	party.flyingOrLight += lightTurns
+	if gameMode == modeDungeon {
+		lookAround()
+	}
 }
 
-func SPL_Negate() { /*C_6AE9*/
-	if C_63B4() == 0 {
-		return
-	}
-	spell_sta = 'N'
-	spell_cnt = 10
-}
+func castMagicMissile() { castMissile(tileMissile) }
+func castNegate()       { castLasting(effectNegate) }
 
-func SPL_Open() { /*C_6B02*/
-	if C_63B4() == 0 {
+func castOpen() {
+	if !castIt() {
 		return
 	}
-	if CurMode == MOD_OUTDOORS && Party._tile == TIL_18 {
-		w_Failed()
+	if gameMode == modeOutdoors && party.tile == tileBalloon {
+		spellFailed()
 		return
 	}
-	if CurMode >= MOD_COMBAT {
-		C_7337()
+	if gameMode >= modeCombat {
+		getChestInCombat()
 	} else {
-		C_722F(-1) /*100% chance evasion*/
+		getChest(-1) // a sure escape from the trap
 	}
 }
 
-func SPL_Protection() { /*C_6B36*/
-	if C_63B4() == 0 {
+func castProtection() { castLasting(effectProtection) }
+func castQuickness()  { castLasting(effectQuickness) }
+
+func castResurrect() {
+	if gameMode >= modeCombat {
+		spellFailed()
 		return
 	}
-	spell_sta = 'P'
-	spell_cnt = 10
+	m := askMember("Who:" + answerRoom(2))
+	if m >= 0 && castIt() {
+		changeStatus(m, statusDead, statusGood)
+	}
 }
 
-func SPL_Quickness() { /*C_6B4F*/
-	if C_63B4() == 0 {
-		return
+// eachMonster calls do for each monster slot, last first.
+func eachMonster(do func(m int)) {
+	for m := len(fighters.tile) - 1; m >= 0; m-- {
+		do(m)
 	}
-	spell_sta = 'Q'
-	spell_cnt = 10
 }
 
-func SPL_Resurrect() { /*C_6B68*/
-	if CurMode >= MOD_COMBAT {
-		w_Failed()
+func castSleep() {
+	if !combatOnly() || !castIt() {
 		return
 	}
-	si := AskChara( /*D_2127*/ "Who:\x12\x12\b")
-	if si < 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if Party.chara[si]._stat != 'D' {
-		w_Failed()
-		return
-	}
-	Party.chara[si]._stat = 'G'
-}
-
-func SPL_Sleep() { /*C_6BAE*/
-	if C_6428() == 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	for si := 15; si >= 0; si-- {
-		if Fighters._tile[si] != 0 && C_636D(int(Fighters._tile[si])) == 0 && Fighters._tile[si] != TIL_FC && Fighters._HP[si] < u_rand_a() {
-			Fighters._sleeping[si] = 1
+	eachMonster(func(m int) {
+		t := fighters.tile[m]
+		if t != 0 && !isUndead(t) && t != tileBalron && fighters.hp[m] < randomByte() {
+			fighters.sleeping[m] = 1
 		}
-	}
+	})
 }
 
-func SPL_Tremor() { /*C_6BF8*/
-	if C_6428() == 0 {
+// The undead spell and the tremor leave a monster this many hit points (it flees below
+// fleeingHP).
+const shakenHP = 23
+
+// tremorSpares are the hit points from which a monster stands the tremor.
+const tremorSpares = 192
+
+func castTremor() {
+	if !combatOnly() || !castIt() {
 		return
 	}
-	if C_63B4() == 0 {
-		return
-	}
-	shakefx()
-	hit_tile = TIL_4F
-	for si := 15; si >= 0; si-- {
-		if Fighters._tile[si] != 0 && Fighters._HP[si] < 192 {
-			if U4_RND1(1) != 0 {
-				if U4_RND1(1) != 0 {
-					Fighters._HP[si] = 23
-				}
-				continue
+	shakeScreen()
+	hitTile = tileHitFlash
+	eachMonster(func(m int) {
+		if fighters.tile[m] == 0 || fighters.hp[m] >= tremorSpares {
+			return
+		}
+		if randomBits(1) != 0 { // missed; half of these are shaken
+			if randomBits(1) != 0 {
+				fighters.hp[m] = shakenHP
 			}
-			hit_x = Combat._npcX[si]
-			hit_y = Combat._npcY[si]
-			C_3C54()
-			sound(6)
-			COM_DoDamage(si, int(activeChara), 0xff)
+			return
 		}
-	}
-	hit_tile = 0
+		hitX = battlefield.monsterX[m]
+		hitY = battlefield.monsterY[m]
+		drawCombat()
+		sound(soundMonsterHit)
+		damageMonster(m, int(activeMember), 255)
+	})
+	hitTile = 0
 }
 
-func SPL_Undead() { /*C_6C71*/
-	if C_6428() == 0 {
+func castUndead() {
+	if !combatOnly() || !castIt() {
 		return
 	}
-	if C_63B4() == 0 {
-		return
-	}
-	for si := 15; si >= 0; si-- {
-		if C_636D(int(Fighters._tile[si])) != 0 && U4_RND1(1) != 0 && Fighters._HP[si] > 23 {
-			Fighters._HP[si] = 23
+	eachMonster(func(m int) {
+		if isUndead(fighters.tile[m]) && randomBits(1) != 0 && fighters.hp[m] > shakenHP {
+			fighters.hp[m] = shakenHP
 		}
+	})
+}
+
+func castView() {
+	if castIt() {
+		peerAtGem()
 	}
 }
 
-func SPL_View() { /*C_6CB2*/
-	if C_63B4() == 0 {
+func castWinds() {
+	if !outdoorsOnly() {
 		return
 	}
-	C_C403()
-}
-
-func SPL_Winds() { /*C_6CC3*/
-	var bp_02, bp_04 int
-
-	if C_6409() == 0 {
+	dx, dy := askDirection("From Dir: ")
+	if dx|dy == 0 || !castIt() {
 		return
 	}
-	AskDir( /*D_212F*/ "From Dir: ", &bp_02, &bp_04)
-	if bp_02|bp_04 == 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if bp_02 != 0 {
-		if bp_02 == 1 {
-			WindDir = DIR_E
-		} else {
-			WindDir = DIR_W
-		}
-	} else {
-		if bp_04 == 1 {
-			WindDir = DIR_S
-		} else {
-			WindDir = DIR_N
-		}
+	switch {
+	case dx == 1:
+		windDir = dirEast
+	case dx != 0:
+		windDir = dirWest
+	case dy == 1:
+		windDir = dirSouth
+	default:
+		windDir = dirNorth
 	}
 }
 
-func SPL_X_it() { /*C_6D22*/
-	if C_6447() == 0 {
-		return
+func castXit() {
+	if dungeonOnly() && castIt() {
+		party.z = -1 // out of the dungeon
 	}
-	if C_63B4() == 0 {
-		return
-	}
-	Party._z = -1
 }
 
-func SPL_Y_up() { /*C_6D3D*/
-	var loc_A int
-	var loc_B, loc_C uint8
+// landTries is how many random rooms the Y-up and Z-down spells try for an empty one.
+const landTries = 32
 
-	if C_6447() == 0 {
-		return
-	}
-	if C_63B4() == 0 {
-		return
-	}
-	if Party._loc == 0x18 {
-		w_Failed()
-		return
-	}
-	Party._z--
-	if Party._z < 0 {
-		return
-	}
-	for loc_A = 32; loc_A > 0; loc_A-- {
-		loc_B = uint8(U4_RND1(7))
-		loc_C = uint8(U4_RND1(7))
-		if *D_8742.x8x8x8(int(Party._z), int(loc_C), int(loc_B)) == 0 {
+// landOnLevel moves the party to an empty room of the level it is on; false if none was
+// found.
+func landOnLevel() bool {
+	var x, y uint8
+	tries := landTries
+	for ; tries > 0; tries-- {
+		x = uint8(randomBits(levelSize - 1))
+		y = uint8(randomBits(levelSize - 1))
+		if *area.dungeonRoom(int(party.z), int(y), int(x)) == dngCorridor {
 			break
 		}
 	}
-	if loc_A == 0 {
-		Party._z++
-		w_Failed()
-		return
+	if tries == 0 {
+		return false
 	}
-	Party._x = loc_B
-	Party._y = loc_C
+	party.x, party.y = x, y
+	return true
 }
 
-func SPL_Z_down() { /*C_6DC1*/
-	var loc_A int
-	var loc_B, loc_C uint8
-
-	if C_6447() == 0 {
+func castYup() {
+	if !dungeonOnly() || !castIt() {
 		return
 	}
-	if C_63B4() == 0 {
+	if party.loc == locAbyss {
+		spellFailed()
 		return
 	}
-	if Party._loc == 0x18 || Party._z == 7 {
-		w_Failed()
-		return
+	party.z--
+	if party.z < 0 {
+		return // up out of the dungeon
 	}
-	Party._z++
-	for loc_A = 32; loc_A > 0; loc_A-- {
-		loc_B = uint8(U4_RND1(7))
-		loc_C = uint8(U4_RND1(7))
-		if *D_8742.x8x8x8(int(Party._z), int(loc_C), int(loc_B)) == 0 {
-			break
-		}
+	if !landOnLevel() {
+		party.z++
+		spellFailed()
 	}
-	if loc_A == 0 {
-		Party._z--
-		w_Failed()
-		return
-	}
-	Party._x = loc_B
-	Party._y = loc_C
 }
 
-var D_216E = [26]func(){
-	SPL_Awaken,
-	SPL_Blink,
-	SPL_Cure,
-	SPL_Dispel,
-	SPL_Energy,
-	SPL_Fireball,
-	SPL_Gate,
-	SPL_Heal,
-	SPL_Iceball,
-	SPL_Jinx,
-	SPL_Kill,
-	SPL_Light,
-	SPL_MagicMisl,
-	SPL_Negate,
-	SPL_Open,
-	SPL_Protection,
-	SPL_Quickness,
-	SPL_Resurrect,
-	SPL_Sleep,
-	SPL_Tremor,
-	SPL_Undead,
-	SPL_View,
-	SPL_Winds,
-	SPL_X_it,
-	SPL_Y_up,
-	SPL_Z_down,
+func castZdown() {
+	if !dungeonOnly() || !castIt() {
+		return
+	}
+	if party.loc == locAbyss || party.z == dungeonLevels-1 {
+		spellFailed()
+		return
+	}
+	party.z++
+	if !landOnLevel() {
+		party.z--
+		spellFailed()
+	}
 }
 
-func CMD_Cast() { /*C_6E4A*/
-	u4_puts( /*D_213A*/ "Cast Spell!\n")
-	if CurMode < MOD_COMBAT {
-		activeChara = int16(AskChara( /*D_2147*/ "Player:\x12\x12\b"))
-		if activeChara < 0 {
+var spells = [spellCount]func(){
+	spellAwaken:       castAwaken,
+	spellBlink:        castBlink,
+	spellCure:         castCure,
+	spellDispel:       castDispel,
+	spellEnergy:       castEnergy,
+	spellFireball:     castFireball,
+	spellGate:         castGate,
+	spellHeal:         castHeal,
+	spellIceball:      castIceball,
+	spellJinx:         castJinx,
+	spellKill:         castKill,
+	spellLight:        castLight,
+	spellMagicMissile: castMagicMissile,
+	spellNegate:       castNegate,
+	spellOpen:         castOpen,
+	spellProtection:   castProtection,
+	spellQuickness:    castQuickness,
+	spellResurrect:    castResurrect,
+	spellSleep:        castSleep,
+	spellTremor:       castTremor,
+	spellUndead:       castUndead,
+	spellView:         castView,
+	spellWinds:        castWinds,
+	spellXit:          castXit,
+	spellYup:          castYup,
+	spellZdown:        castZdown,
+}
+
+func cmdCast() {
+	printText("Cast Spell!\n")
+	if gameMode < modeCombat {
+		activeMember = int16(askMember("Player:" + answerRoom(2)))
+		if activeMember < 0 {
 			return
 		}
-		if !isCharaConscious(int(activeChara)) {
-			w_Disabled()
+		if !isConscious(int(activeMember)) {
+			sayDisabled()
 			return
 		}
 	}
-	Gra_13()
-	C_4C42(0)
-	txt_Y = 23
-	txt_X = 24
-	D_8CCC = AskLetter( /*D_2152*/ "Spell:\x12\x12\b", 'A', 'Z')
-	Gra_13()
-	C_4649()
-	dspl_Stats()
-	if CurMode >= MOD_COMBAT {
-		Gra_11(int(activeChara))
-	}
-	if D_8CCC < 0 {
+	clearStatus()
+	showMixtures()
+	textRow, textCol = promptRow, promptCol
+	castingSpell = askLetter("Spell:"+answerRoom(2), 'A', 'Z')
+	afterChoosing()
+	if castingSpell < 0 {
 		return
 	}
-	D_8CCC -= 'A'
-	u4_puts(D_1E98[101+D_8CCC])
-	u4_puts( /*D_215C*/ "!\n")
-	/*-- check mixture --*/
-	if Party._mixtures[D_8CCC] == 0 {
-		w_NoneLeft()
+	castingSpell -= 'A'
+	printText(spellNames[castingSpell])
+	printText("!\n")
+	if party.mixtures[castingSpell] == 0 {
+		sayNoneLeft()
 		return
 	}
-	Party._mixtures[D_8CCC]--
-	/*-- check m.p --*/
-	if Party.chara[activeChara]._MP < uint16(D_208C[D_8CCC]) {
-		u4_puts( /*D_215F*/ "M.P. too low!\n")
-		w_Failed()
+	party.mixtures[castingSpell]--
+	if party.members[activeMember].mp < uint16(spellCost[castingSpell]) {
+		printText("M.P. too low!\n")
+		spellFailed()
 		return
 	}
-	/*-- cast spell --*/
-	D_216E[D_8CCC]()
-	dspl_Stats()
+	spells[castingSpell]()
+	showStats()
 }

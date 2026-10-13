@@ -6,18 +6,18 @@ import "github.com/memmaker/u4-go/internal/music"
 // the upgrade patch's driver (seeing the prompt drawn) also ended the songs of conversations,
 // shops and camping.
 func musicPrompt() {
-	switch CurMode {
-	case MOD_OUTDOORS:
+	switch gameMode {
+	case modeOutdoors:
 		music.Play(music.Overworld)
-	case MOD_BUILDING:
-		if Party._loc <= 4 { // the castles
+	case modeTown:
+		if party.loc <= 4 { // the castles
 			music.Play(music.Castle)
 		} else {
 			music.Play(music.Towns)
 		}
-	case MOD_DUNGEON:
+	case modeDungeon:
 		music.Play(music.Dungeon)
-	case MOD_COMBAT, MOD_COM_CAMP, MOD_COM_ROOM:
+	case modeCombat, modeCombatCamp, modeCombatRoom:
 		music.Play(music.Combat)
 	}
 }

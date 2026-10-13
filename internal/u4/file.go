@@ -25,7 +25,7 @@ type stop struct{ err error }
 
 func fatal(err error)                { panic(stop{err}) }
 func fatalf(format string, a ...any) { fatal(fmt.Errorf(format, a...)) }
-func driverExit(code int)            { fatalf("EGA driver error %#x", code) }
+func driverExit(code int)            { fatalf("EGA driver error %d", code) }
 func backToTitle()                   { panic(stop{}) }
 func check(err error) {
 	if err != nil {
@@ -76,63 +76,62 @@ func SaveBytes(name string, b []byte) {
 
 // ---- record layouts ----
 
-func (n *tNPC) Fields(c *gamefs.Codec) {
-	for _, a := range []*[32]uint8{&n._gtile, &n._x, &n._y, &n._tile, &n._old_x, &n._old_y, &n._var, &n._tlkidx} {
+func (n *peopleTable) Fields(c *gamefs.Codec) {
+	for _, a := range []*[32]uint8{&n.baseTile, &n.x, &n.y, &n.tile, &n.oldX, &n.oldY, &n.behaviour, &n.talkIndex} {
 		c.Bytes(a[:])
 	}
 }
 
-func (t *t_500) Fields(c *gamefs.Codec) {
-	c.Bytes(t._map[:])
-	t._npc.Fields(c)
+func (t *areaRecord) Fields(c *gamefs.Codec) {
+	c.Bytes(t.tiles[:])
+	t.people.Fields(c)
 }
 
-func (h *tChara) Fields(c *gamefs.Codec) {
-	c.U16s(h._HP[:])
-	for _, p := range []*uint16{&h._XP, &h._str, &h._dex, &h._int, &h._MP} {
+func (h *character) Fields(c *gamefs.Codec) {
+	for _, p := range []*uint16{&h.hp, &h.maxHP, &h.xp, &h.strength, &h.dexterity, &h.intelligence, &h.mp} {
 		c.U16(p)
 	}
-	c.Bytes(h.__0e[:])
-	c.U16(&h._weapon)
-	c.U16(&h._armor)
-	c.Bytes(h._name[:])
-	c.U8(&h.p_24)
-	c.U8(&h._class)
-	c.U8(&h._stat)
+	c.Bytes(h.unused[:])
+	c.U16(&h.weapon)
+	c.U16(&h.armor)
+	c.Bytes(h.name[:])
+	c.U8(&h.sex)
+	c.U8(&h.class)
+	c.U8(&h.status)
 }
 
-func (p *tParty) Fields(c *gamefs.Codec) {
-	c.U32(&p.f_000)
-	c.U32(&p._moves)
-	for i := range p.chara {
-		p.chara[i].Fields(c)
+func (p *partyRecord) Fields(c *gamefs.Codec) {
+	c.U32(&p.counter)
+	c.U32(&p.moves)
+	for i := range p.members {
+		p.members[i].Fields(c)
 	}
-	c.I32(&p._food)
-	for _, f := range []*uint16{&p._gold, &p._hones, &p._compa, &p._valor, &p._justi, &p._sacri,
-		&p._honor, &p._spiri, &p._humil, &p._torches, &p._gems, &p._keys, &p._sextants} {
+	c.I32(&p.food)
+	for _, f := range []*uint16{&p.gold, &p.karmaHonesty, &p.karmaCompassion, &p.karmaValor, &p.karmaJustice, &p.karmaSacrifice,
+		&p.karmaHonor, &p.karmaSpirituality, &p.karmaHumility, &p.torches, &p.gems, &p.keys, &p.sextants} {
 		c.U16(f)
 	}
-	c.U16s(p._armors[:])
-	c.U16s(p._weapons[:])
-	c.U16s(p._reagents[:])
-	c.U16s(p._mixtures[:])
-	c.U16(&p.mItems)
-	for _, f := range []*uint8{&p._x, &p._y, &p.mStones, &p.mRunes} {
+	c.U16s(p.armors[:])
+	c.U16s(p.weapons[:])
+	c.U16s(p.reagents[:])
+	c.U16s(p.mixtures[:])
+	c.U16(&p.items)
+	for _, f := range []*uint8{&p.x, &p.y, &p.stones, &p.runes} {
 		c.U8(f)
 	}
-	for _, f := range []*uint16{&p.f_1d8, &p._tile, &p.f_1dc, &p._trammel, &p._felucca, &p._ship,
-		&p.f_1e4, &p.f_1e6, &p.f_1e8, &p.f_1ea, &p.f_1ec} {
+	for _, f := range []*uint16{&p.size, &p.tile, &p.flyingOrLight, &p.trammel, &p.felucca, &p.hull,
+		&p.metLordBritish, &p.lastCamp, &p.lastFound, &p.lastMeditation, &p.lastKarmaTalk} {
 		c.U16(f)
 	}
-	c.U8(&p.out_x)
-	c.U8(&p.out_y)
-	c.U16(&p._dir)
-	c.I16(&p._z)
-	c.U16(&p._loc)
+	c.U8(&p.outX)
+	c.U8(&p.outY)
+	c.U16(&p.dir)
+	c.I16(&p.z)
+	c.U16(&p.loc)
 }
 
-func (m *tCombat) Fields(c *gamefs.Codec) {
-	for _, a := range [][]uint8{m._npcX[:], m._npcY[:], m._charaX[:], m._charaY[:], m._030[:], m._map[:], m._0b9[:]} {
+func (m *battlefieldRecord) Fields(c *gamefs.Codec) {
+	for _, a := range [][]uint8{m.monsterX[:], m.monsterY[:], m.memberX[:], m.memberY[:], m.unused1[:], m.tiles[:], m.unused2[:]} {
 		c.Bytes(a)
 	}
 }

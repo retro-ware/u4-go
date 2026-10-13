@@ -114,14 +114,15 @@ func push(keys ...uint16) {
 	}
 }
 
+// BIOS key words: the scan code in the high byte, the character in the low.
 const (
-	keyEnter = 0x1c0d
-	keyEsc   = 0x011b
-	keySpace = 0x3920
-	keyBS    = 0x0e08
+	keyEnter = scanEnter<<8 | '\r'
+	keyEsc   = scanEscape<<8 | asciiEscape
+	keySpace = scanSpace<<8 | ' '
+	keyBS    = scanBackspace<<8 | '\b'
 )
 
-var arrowKeys = map[button]uint16{bUp: 0x4800, bDown: 0x5000, bLeft: 0x4b00, bRight: 0x4d00}
+var arrowKeys = map[button]uint16{bUp: scanUp << 8, bDown: scanDown << 8, bLeft: scanLeft << 8, bRight: scanRight << 8}
 
 func promptMenu() *Menu {
 	if PromptMenu == nil {

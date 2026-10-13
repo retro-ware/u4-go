@@ -1,390 +1,414 @@
 package u4
 
-// Port of U4_EXPLO.C: entering and leaving places, boarding, doors, klimb and descend.
+// Entering and leaving places, boarding and leaving vehicles, doors, klimbing and
+// descending.
 
-var D_1738 = [16]string{
-	// Castles
+// talkFiles are the conversations of the castles, townes and villages, by location.
+var talkFiles = [16]string{
 	"LCB.TLK", "LYCAEUM.TLK", "EMPATH.TLK", "SERPENT.TLK",
-	// Townes
 	"MOONGLOW.TLK", "BRITAIN.TLK", "JHELOM.TLK", "YEW.TLK",
 	"MINOC.TLK", "TRINSIC.TLK", "SKARA.TLK", "MAGINCIA.TLK",
-	// Villages
 	"PAWS.TLK", "DEN.TLK", "VESPER.TLK", "COVE.TLK",
 }
 
-// load castle/towne/village files
-func C_3E30(bp04 int) {
-	Save("OUTMONST.SAV", &D_8742._npc)
-	LoadRec(D_0824[bp04-0x01], &D_8742)
-	File_TLK = readFile(D_1738[Party._loc-1])
-	CurMode = MOD_BUILDING
+// Where the party starts in a place.
+const (
+	towneGateX, towneGateY         = 1, 15  // a towne's, village's or ruin's west gate
+	castleGateX, castleGateY       = 15, 30 // a castle's south gate
+	dungeonStartX, dungeonStartY   = 1, 1
+	hythlothStartX, hythlothStartY = 5, 5 // down the ladder from Lord British's cellar
+
+	abyssX, abyssY = 233, 233 // the Abyss's entrance in the lava
+	cellarLadderY  = 2        // the ladder in Lord British's castle that leads into Hythloth
+)
+
+// placeName is the name of location loc.
+func placeName(loc uint16) string { return placeNames[int(loc)-1] }
+
+// loadTown loads a castle's, towne's or village's map, people and conversations.
+func loadTown(loc int) {
+	Save("OUTMONST.SAV", &area.people)
+	LoadRec(townFiles[loc-1], &area)
+	talkFile = readFile(talkFiles[party.loc-1])
+	gameMode = modeTown
 }
 
-// load dungeon files
-func C_3E94() {
-	Load(D_0894[Party._loc-0x11], D_8742._map[:0x200])
-	File_DNG = readFile(D_0894[Party._loc-0x11])
-	D_8742._npc._tile = [32]uint8{}
+// loadDungeon loads the dungeon's map, and clears the people.
+func loadDungeon() {
+	file := dungeonFiles[party.loc-locFirstDungeon]
+	Load(file, area.tiles[:dungeonMapSize])
+	dungeonFile = readFile(file)
+	area.people.tile = [32]uint8{}
 }
 
-func C_3EE4() {
-	C_3E94()
-	CurMode = MOD_DUNGEON
-	Party._dir = DIR_E
-	Party._z = 0
-	DNG_main()
+// startDungeon takes the party into the dungeon, on its first level facing east.
+func startDungeon() {
+	loadDungeon()
+	gameMode = modeDungeon
+	party.dir = dirEast
+	party.z = 0
+	dungeonLoop()
 }
 
-// enter dungeon
-func C_3F03() {
-	Gra_CR()
-	Gra_CR()
-	if Party._tile != TIL_1F {
-		Party._loc = 0
-		w_OnlyOnFoot()
+// enterDungeon takes the party, if on foot, into a dungeon.
+func enterDungeon() {
+	newLine()
+	newLine()
+	if party.tile != tileOnFoot {
+		party.loc = 0
+		sayOnlyOnFoot()
 		return
 	}
-	Party._x = 1
-	Party._y = 1
-	Save("OUTMONST.SAV", &D_8742._npc)
-	C_3EE4()
+	party.x, party.y = dungeonStartX, dungeonStartY
+	Save("OUTMONST.SAV", &area.people)
+	startDungeon()
 }
 
-// enter towne
-func C_3F4A() {
-	u4_puts(D_1E98[127+int(Party._loc)-1])
-	Gra_CR()
-	Gra_CR()
-	Party._y = 15
-	D_959C.y = 15
-	Party._x = 1
-	D_959C.x = 1
-	C_3E30(int(Party._loc))
-	if Party._loc-0x05 < 8 {
-		for si := int(Party.f_1d8) - 1; si >= 1; si-- {
-			if uint16(Party.chara[si]._class) == Party._loc-0x05 {
-				D_8742._npc._var[31] = 0
-				D_8742._npc._gtile[31] = 0
-				D_8742._npc._tile[31] = 0
+// StartInTown, when set, is asked where the party stands on entering town loc (1..16)
+// instead of the west gate; the replay test uses it to start at a shop counter.
+var StartInTown func(loc int) (x, y uint8, ok bool)
+
+// enterTowne takes the party through a towne's west gate. In a class's home towne the one
+// waiting to join (the last of its people) is gone when they are in the party already.
+func enterTowne() {
+	printText(placeName(party.loc))
+	newLine()
+	newLine()
+	party.x, party.y = towneGateX, towneGateY
+	windowPos.x, windowPos.y = towneGateX, towneGateY
+	loadTown(int(party.loc))
+	if StartInTown != nil {
+		if x, y, ok := StartInTown(int(party.loc)); ok {
+			party.x, party.y = x, y
+			windowPos.x, windowPos.y = x, y
+		}
+	}
+	if party.loc >= locFirstTowne && party.loc < locFirstTowne+8 {
+		class := party.loc - locFirstTowne // the townes are in the classes' order
+		const companion = 31
+		for i := int(party.size) - 1; i >= 1; i-- {
+			if uint16(party.members[i].class) == class {
+				area.people.behaviour[companion] = 0
+				area.people.baseTile[companion] = 0
+				area.people.tile[companion] = 0
 			}
 		}
 	}
 }
 
-// enter the abyss?
-func C_3FB9() {
-	it := Party.mItems
-	if (it>>ST_BOOK)&(it>>ST_BELL)&(it>>ST_CANDLE)&(it>>ST_USE_BOOK)&(it>>ST_USE_BELL)&(it>>ST_USE_CANDLE)&1 != 0 {
-		u4_puts(D_1E98[127+int(Party._loc)-1])
-		C_3F03()
-	} else {
-		Party._loc = 0
-		w_Cant_t()
+// enterAbyss lets the party into the Abyss once the Bell, Book and Candle have opened it.
+func enterAbyss() {
+	opened := true
+	for _, item := range []int{itemBook, itemBell, itemCandle, itemBookUsed, itemBellUsed, itemCandleUsed} {
+		opened = opened && hasBit(party.items, item)
 	}
-}
-
-func CMD_Enter() { /*C_4018*/
-	u4_puts("Enter ")
-	if Party._loc != 0 || Party._tile == TIL_18 {
-		w_What()
+	if !opened {
+		party.loc = 0
+		sayCant()
 		return
 	}
-	si := 31
-	for ; si >= 0; si-- {
-		if Party._x == D_0844[si] && Party._y == D_0864[si] {
+	printText(placeName(party.loc))
+	enterDungeon()
+}
+
+func cmdEnter() {
+	printText("Enter ")
+	if party.loc != 0 || party.tile == tileBalloon {
+		sayWhat()
+		return
+	}
+	place := -1
+	for i := len(placeX) - 1; i >= 0; i-- {
+		if party.x == placeX[i] && party.y == placeY[i] {
+			place = i
 			break
 		}
 	}
-	if si == -1 {
-		w_What()
+	if place == -1 {
+		sayWhat()
 		return
 	}
-	Party._loc = uint16(si + 1)
-	Party.out_x = Party._x
-	Party.out_y = Party._y
-	name := func() string { return D_1E98[127+int(Party._loc)-1] }
-	switch *D_8742.x32x32(int(D_959C.y), int(D_959C.x)) {
-	case TIL_09:
-		u4_puts("dungeon!\n\n")
-		u4_puts(name())
-		C_3F03()
-	case TIL_0A:
-		u4_puts("towne!\n\n")
-		C_3F4A()
-	case TIL_0B, TIL_0E:
-		u4_puts("castle!\n\n")
-		u4_puts(name())
-		Gra_CR()
-		Gra_CR()
-		Party._y = 0x1e
-		D_959C.y = 0x1e
-		Party._x = 0x0f
-		D_959C.x = 0x0f
-		Party._z = 0
-		C_3E30(int(Party._loc))
-	case TIL_0C:
-		u4_puts("village!\n\n")
-		C_3F4A()
-	case TIL_1D:
-		u4_puts("ruin!\n\n")
-		C_3F4A()
-	case TIL_4C:
-		if Party._x != 0xe9 || Party._y != 0xe9 {
-			w_What()
+	party.loc = uint16(place + 1)
+	party.outX, party.outY = party.x, party.y
+	switch *area.townTile(int(windowPos.y), int(windowPos.x)) {
+	case tileDungeon:
+		printText("dungeon!\n\n")
+		printText(placeName(party.loc))
+		enterDungeon()
+	case tileTowne:
+		printText("towne!\n\n")
+		enterTowne()
+	case tileCastle, tileCastleBritanniaEntrance:
+		printText("castle!\n\n")
+		printText(placeName(party.loc))
+		newLine()
+		newLine()
+		party.x, party.y = castleGateX, castleGateY
+		windowPos.x, windowPos.y = castleGateX, castleGateY
+		party.z = 0
+		loadTown(int(party.loc))
+	case tileVillage:
+		printText("village!\n\n")
+		enterTowne()
+	case tileRuins:
+		printText("ruin!\n\n")
+		enterTowne()
+	case tileLava:
+		if party.x != abyssX || party.y != abyssY {
+			sayWhat()
 			return
 		}
-		C_3FB9()
-	case TIL_46:
-		C_3FB9()
-	case TIL_1E:
-		u4_puts("the Shrine of\n")
-		u4_puts(D_1E98[151+int(Party._loc)-0x19])
-		Gra_CR()
-		C_E72C()
+		enterAbyss()
+	case tileFireField:
+		enterAbyss()
+	case tileShrine:
+		printText("the Shrine of\n")
+		printText(virtueNames[int(party.loc)-locFirstShrine])
+		newLine()
+		enterShrine()
 	default:
-		w_What()
+		sayWhat()
 	}
 }
 
-func C_4164() {
-	n := &D_8742._npc
-	si := 31
-	for ; si >= 8; si-- {
-		if n._tile[si] == 0 {
+// leaveVehicle leaves the party's ship, horse or balloon where it is, as one of the world's
+// people (the first eight are monsters): in a free place, or if none is free over one of
+// the last sixteen.
+func leaveVehicle() {
+	people := &area.people
+	slot := -1
+	for i := len(people.tile) - 1; i >= 8; i-- {
+		if people.tile[i] == 0 {
+			slot = i
 			break
 		}
 	}
-	if si == 7 {
-		si = U4_RND1(15) | 0x10
+	if slot == -1 {
+		slot = 16 + randomBits(15)
 	}
-	n._tile[si] = uint8(Party._tile)
-	n._gtile[si] = uint8(Party._tile)
-	n._x[si] = Party._x
-	n._y[si] = Party._y
-	n._tlkidx[si] = 0
-	n._var[si] = 0
-	Party._tile = TIL_1F
-	Gra_CR()
+	people.tile[slot] = uint8(party.tile)
+	people.baseTile[slot] = uint8(party.tile)
+	people.x[slot] = party.x
+	people.y[slot] = party.y
+	people.talkIndex[slot] = 0
+	people.behaviour[slot] = 0
+	party.tile = tileOnFoot
+	newLine()
 }
 
-func CMD_X_it() { /*C_41C0*/
-	u4_puts("X-it ")
+func cmdExit() {
+	printText("X-it ")
 	switch {
-	case Party._tile < TIL_14:
-		ship_x = Party._x
-		ship_y = Party._y
-		C_4164()
-	case Party._tile < TIL_16:
-		D_95C6 = 0
-		C_4164()
-	case Party._tile == TIL_18 && Party.f_1dc == 0:
-		C_4164()
+	case party.tile <= tileShipSouth:
+		shipX, shipY = party.x, party.y
+		leaveVehicle()
+	case party.tile <= tileHorseEast:
+		gallopStep = 0
+		leaveVehicle()
+	case party.tile == tileBalloon && party.flyingOrLight == 0:
+		leaveVehicle()
 	default:
-		w_What()
+		sayWhat()
 	}
 }
 
-func C_4206(bp04 int) {
-	n := &D_8742._npc
-	si := 31
-	for ; si >= 8; si-- {
-		if Party._x == n._x[si] && Party._y == n._y[si] && bp04 == int(n._tile[si]&^3) {
+// takeVehicle takes the vehicle the party stands on: kind is the first of its tiles (its
+// tiles differ in the two lowest bits only).
+func takeVehicle(kind int) {
+	people := &area.people
+	for i := len(people.tile) - 1; i >= 8; i-- {
+		if party.x == people.x[i] && party.y == people.y[i] && kind == int(people.tile[i]&^3) {
+			people.tile[i] = 0
+			people.baseTile[i] = 0
 			break
 		}
 	}
-	if si != 7 {
-		n._tile[si] = 0
-		n._gtile[si] = 0
-	}
-	Party._tile = uint16(tile_cur)
+	party.tile = uint16(hereTile)
 }
 
-func CMD_Board() { /*C_4253*/
-	if Party._tile != TIL_1F {
-		u4_puts("Board: ")
-		w_Cant_t()
+func cmdBoard() {
+	if party.tile != tileOnFoot {
+		printText("Board: ")
+		sayCant()
 		return
 	}
-	if tile_cur == TIL_14 || tile_cur == TIL_15 {
-		C_4206(TIL_14)
-		u4_puts("Mount Horse!\n")
+	if hereTile == tileHorseWest || hereTile == tileHorseEast {
+		takeVehicle(tileHorseWest)
+		printText("Mount Horse!\n")
 		return
 	}
-	u4_puts("Board ")
-	if tile_cur == TIL_18 {
-		C_4206(TIL_18)
-		u4_puts("Balloon!\n")
-		Party.f_1dc = 0
+	printText("Board ")
+	if hereTile == tileBalloon {
+		takeVehicle(tileBalloon)
+		printText("Balloon!\n")
+		party.flyingOrLight = 0
 		return
 	}
-	if tile_cur < TIL_10 || tile_cur > TIL_13 {
-		w_What()
+	if hereTile < tileShipWest || hereTile > tileShipSouth {
+		sayWhat()
 		return
 	}
-	C_4206(TIL_10)
-	u4_puts("Frigate!\n")
-	if ship_x != Party._x || ship_y != Party._y {
-		Party._ship = 50
+	takeVehicle(tileShipWest)
+	printText("Frigate!\n")
+	if shipX != party.x || shipY != party.y {
+		party.hull = 50 // not the ship left last: a new one
 	}
 }
 
-func CMD_Yell() { /*C_42E8*/
-	u4_puts("Yell ")
-	if Party._tile == TIL_14 || Party._tile == TIL_15 {
-		D_95C6 ^= 1
-		if D_95C6 != 0 {
-			u4_puts("Giddyup!\n")
-		} else {
-			u4_puts("Whoa!\n")
-		}
+func cmdYell() {
+	printText("Yell ")
+	if party.tile != tileHorseWest && party.tile != tileHorseEast {
+		sayWhat()
+		return
+	}
+	gallopStep ^= 1
+	if gallopStep != 0 {
+		printText("Giddyup!\n")
 	} else {
-		w_What()
+		printText("Whoa!\n")
 	}
 }
+
+// An opened door closes again after doorOpenTurns turns.
+const doorOpenTurns = 5
 
 var (
-	D_17FA uint16 // current opened door's x
-	D_17FC uint16 // current opened door's y
-	D_17FE uint16 // current opened door's delay
+	openDoorX, openDoorY uint16
+	doorCloseTurns       uint16 // turns until the open door closes; 0: none open
 )
 
-// automatic door close
-func C_431D() {
-	if CurMode == MOD_BUILDING && D_17FE != 0 {
-		D_17FE--
-		if D_17FE == 0 {
-			*D_8742.x32x32(int(D_17FC), int(D_17FA)) = TIL_3B
-		}
-	} else {
-		D_17FE = 0
+// closeDoorInTime counts down the open door's turns and closes it at the end.
+func closeDoorInTime() {
+	if gameMode != modeTown || doorCloseTurns == 0 {
+		doorCloseTurns = 0
+		return
+	}
+	doorCloseTurns--
+	if doorCloseTurns == 0 {
+		*area.townTile(int(openDoorY), int(openDoorX)) = tileDoor
 	}
 }
 
-func CMD_Open() { /*C_4353*/
-	var bp_02, bp_04 int
-	for D_17FE != 0 {
-		C_431D()
+func cmdOpen() {
+	for doorCloseTurns != 0 {
+		closeDoorInTime()
 	}
-	if CurMode != MOD_BUILDING {
-		u4_puts("Open; ")
-		w_NotHere()
+	if gameMode != modeTown {
+		printText("Open; ")
+		sayNotHere()
 		return
 	}
-	AskDir("Open: ", &bp_02, &bp_04)
-	if bp_02|bp_04 == 0 {
+	dx, dy := askDirection("Open: ")
+	if dx == 0 && dy == 0 {
 		return
 	}
-	x := uint16(bp_02) + uint16(Party._x) // unsigned
-	if x > 0x1f || bp_04 != 0 {
-		w_NotHere()
+	x := dx + int(party.x)
+	if x < 0 || x >= townTiles || dy != 0 { // doors open only east or west
+		sayNotHere()
 		return
 	}
-	si := D_8742.x32x32(int(Party._y), int(x))
-	switch *si {
-	case TIL_3A:
-		w_Cant_t()
-	case TIL_3B:
-		D_17FA = x
-		D_17FC = uint16(Party._y)
-		D_17FE = 5
-		*si = TIL_3E
-		u4_puts("\nOpened!\n")
+	door := area.townTile(int(party.y), x)
+	switch *door {
+	case tileLockedDoor:
+		sayCant()
+	case tileDoor:
+		openDoorX, openDoorY = uint16(x), uint16(party.y)
+		doorCloseTurns = doorOpenTurns
+		*door = tileBrickFloor
+		printText("\nOpened!\n")
 	default:
-		w_NotHere()
+		sayNotHere()
 	}
 }
 
-func CMD_Jimmy() { /*C_43F8*/
-	var bp_02, bp_04 int
-	u4_puts("Jimmy lock!\n")
-	AskDir("Dir: ", &bp_02, &bp_04)
-	if bp_02|bp_04 == 0 {
+func cmdJimmy() {
+	printText("Jimmy lock!\n")
+	dx, dy := askDirection("Dir: ")
+	if dx == 0 && dy == 0 {
 		return
 	}
-	x := bp_02 + int(Party._x)
-	if CurMode != MOD_BUILDING || x > 0x1f || bp_04 != 0 {
-		w_NotHere()
+	// Unlike Open this lets x be -1 at the town's west edge (the tile before the row).
+	x := dx + int(party.x)
+	if gameMode != modeTown || x >= townTiles || dy != 0 {
+		sayNotHere()
 		return
 	}
-	si := D_8742.x32x32(int(Party._y), x)
-	if *si != TIL_3A {
-		w_NotHere()
+	door := area.townTile(int(party.y), x)
+	if *door != tileLockedDoor {
+		sayNotHere()
 		return
 	}
-	if Party._keys == 0 {
-		u4_puts("No keys left!\n")
+	if party.keys == 0 {
+		printText("No keys left!\n")
 		return
 	}
-	Party._keys--
-	*si = TIL_3B
+	party.keys--
+	*door = tileDoor
 }
 
-func CMD_Klimb() { /*C_4477*/
-	u4_puts("Klimb ")
-	if Party._loc == 0 {
-		if Party._tile != TIL_18 {
-			w_What()
+func cmdKlimb() {
+	printText("Klimb ")
+	if party.loc == 0 {
+		if party.tile != tileBalloon {
+			sayWhat()
 			return
 		}
-		u4_puts("altitude\n")
-		Party.f_1dc = 1
-		D_9440 = 0
+		printText("altitude\n")
+		party.flyingOrLight = 1
+		lineOfSight = 0
 		return
 	}
-	if Party._loc == 1 && tile_cur == TIL_1B {
-		if Party._tile != TIL_1F {
-			Gra_CR()
-			w_OnlyOnFoot()
-			return
-		}
-		u4_puts("to second floor!\n")
-		LoadRec("LCB_2.ULT", &D_8742)
-	} else {
-		w_What()
+	if party.loc != locCastleBritannia || hereTile != tileLadderUp {
+		sayWhat()
+		return
 	}
+	if party.tile != tileOnFoot {
+		newLine()
+		sayOnlyOnFoot()
+		return
+	}
+	printText("to second floor!\n")
+	LoadRec("LCB_2.ULT", &area)
 }
 
-func CMD_Descend() { /*C_44EE*/
-	if Party._tile == TIL_18 {
-		u4_puts("Land Balloon\n")
-		if tile_cur != TIL_04 {
-			sound(1)
-			w_NotHere()
+func cmdDescend() {
+	if party.tile == tileBalloon {
+		printText("Land Balloon\n")
+		if hereTile != tileGrass {
+			sound(soundBeep)
+			sayNotHere()
 			return
 		}
-		if Party.f_1dc == 0 {
-			u4_puts("Already Landed!\n")
+		if party.flyingOrLight == 0 {
+			printText("Already Landed!\n")
 			return
 		}
-		Party.f_1dc = 0
-		D_9440 = 1
+		party.flyingOrLight = 0
+		lineOfSight = 1
 		return
 	}
-	if Party._loc != 0x01 {
-		u4_puts("Descend ")
-		w_What()
+	if party.loc != locCastleBritannia {
+		printText("Descend ")
+		sayWhat()
 		return
 	}
-	// in LB's castle
-	if Party._tile != TIL_1F {
-		w_OnlyOnFoot()
+	if party.tile != tileOnFoot {
+		sayOnlyOnFoot()
 		return
 	}
-	u4_puts("Descend ")
-	if tile_cur != TIL_1C {
-		w_What()
+	printText("Descend ")
+	if hereTile != tileLadderDown {
+		sayWhat()
 		return
 	}
-	if Party._y == 2 {
-		u4_puts("into the depths!\n")
-		Party.out_x = 0xef
-		Party.out_y = 0xf0
-		Party._x = 5
-		Party._y = 5
-		Party._loc = 0x17
-		C_3EE4()
+	if party.y == cellarLadderY {
+		printText("into the depths!\n")
+		party.outX, party.outY = hythlothX, hythlothY
+		party.x, party.y = hythlothStartX, hythlothStartY
+		party.loc = locHythloth
+		startDungeon()
 		return
 	}
-	u4_puts("to first floor!\n")
-	LoadRec("LCB_1.ULT", &D_8742)
+	printText("to first floor!\n")
+	LoadRec("LCB_1.ULT", &area)
 }

@@ -1,64 +1,89 @@
 package u4
 
-// Port of U4_USE.C (unsigned char): using the quest items.
+import "strings"
 
-const D_00EE = "Hmm...No effect!\n"
-const D_0100 = "None owned!\n"
+// Use: the stones, keys, bell, book, candle, horn, wheel and skull.
 
-// colors masks
-var D_010E = [3]uint8{
-	1<<6 | 1<<5 | 1<<3 | 1<<0, // truth
-	1<<6 | 1<<4 | 1<<3 | 1<<1, // love
-	1<<6 | 1<<5 | 1<<4 | 1<<2, // courage
+func sayUseNoEffect() { printText("Hmm...No effect!\n") }
+func sayNoneOwned()   { printText("None owned!\n") }
+
+// The altar rooms of the dungeons, by the principle they stand for (altarRoom).
+const (
+	noAltar      = -1
+	altarTruth   = 0
+	altarLove    = 1
+	altarCourage = 2
+)
+
+// altarStones are the four stones each altar takes: the virtues of its principle.
+var altarStones = [3]uint8{
+	altarTruth:   1<<virtueSpirituality | 1<<virtueHonor | 1<<virtueJustice | 1<<virtueHonesty,
+	altarLove:    1<<virtueSpirituality | 1<<virtueSacrifice | 1<<virtueJustice | 1<<virtueCompassion,
+	altarCourage: 1<<virtueSpirituality | 1<<virtueHonor | 1<<virtueSacrifice | 1<<virtueValor,
 }
 
-func C_01E1() {
-	var bp_12 [12]byte
-	a := int(activeChara)
-	if Combat._charaX[a] != 5 || Combat._charaY[a] != 5 || D_943E == -1 {
-		u4_puts(D_00EE)
+// altarKeys is the part of the three part key each altar gives.
+var altarKeys = [3]int{altarTruth: itemKeyTruth, altarLove: itemKeyLove, altarCourage: itemKeyCourage}
+
+// The altar stands in the middle of its room.
+const altarX, altarY = 5, 5
+
+// The longest word the Use prompts take.
+const useWordLen = 10
+
+// askStoneColor reads a colour and returns the stone's virtue, -1 for none, and what was
+// typed.
+func askStoneColor() (int, string) {
+	getsWords = stoneColors()
+	word := readWord(useWordLen)
+	newLine()
+	stone := len(colorNames) - 1
+	for stone >= 0 && !strings.EqualFold(word, colorNames[stone]) {
+		stone--
+	}
+	return stone, word
+}
+
+// useStonesOnAltar: the four right stones on an altar give its part of the key.
+func useStonesOnAltar() {
+	m := int(activeMember)
+	if battlefield.memberX[m] != altarX || battlefield.memberY[m] != altarY || altarRoom == noAltar {
+		sayUseNoEffect()
 		return
 	}
-	u4_puts("\nThere are holes for 4 stones. What colors:\n")
-	bp_04 := uint8(0)
-	for bp_02 := 1; bp_02 <= 4; bp_02++ {
-		u4_putc(bp_02 + 'A' - 1)
-		u4_putc(':')
-		getsWords = stoneColors()
-		u4_gets(bp_12[:], 11)
-		Gra_CR()
-		bp_10 := 7
-		for ; bp_10 >= 0; bp_10-- {
-			if strnicmp(bp_12[:], D_0884[bp_10], 12) == 0 {
-				break
-			}
-		}
-		if bp_10 == -1 || !TST_MSK8(Party.mStones, bp_10) {
-			if bp_12[0] != 0 {
-				u4_puts(D_0100)
+	printText("\nThere are holes for 4 stones. What colors:\n")
+	used := uint8(0)
+	for hole := 'A'; hole <= 'D'; hole++ {
+		printChar(int(hole))
+		printChar(':')
+		stone, word := askStoneColor()
+		if stone == -1 || !hasBit(party.stones, stone) {
+			if word != "" {
+				sayNoneOwned()
 			}
 			return
 		}
-		if (1<<bp_10)&bp_04 != 0 {
-			u4_puts("Already used!\n")
+		if hasBit(used, stone) {
+			printText("Already used!\n")
 			return
 		}
-		bp_04 |= 1 << bp_10
+		setBit(&used, stone)
 	}
-	if D_010E[D_943E] != bp_04 {
-		u4_puts(D_00EE)
+	if altarStones[altarRoom] != used {
+		sayUseNoEffect()
 		return
 	}
-	key := [3]int{ST_KEY_T, ST_KEY_L, ST_KEY_C}[D_943E]
-	if TST_MSK(Party.mItems, key) {
-		u4_puts(D_00EE)
+	key := altarKeys[altarRoom]
+	if hasBit(party.items, key) {
+		sayUseNoEffect()
 		return
 	}
-	SET_MSK(&Party.mItems, key)
-	u4_puts("Thou doth find one third of the Three Part Key!\n")
+	setBit(&party.items, key)
+	printText("Thou doth find one third of the Three Part Key!\n")
 }
 
-var D_0284 = [8]string{
+// abyssQuestions are what the altar on each level of the Abyss asks after.
+var abyssQuestions = [8]string{
 	"Truth",
 	"Love",
 	"Courage",
@@ -69,244 +94,245 @@ var D_0284 = [8]string{
 	"\nA voice rings out:  What Virtue exists independently of Truth, Love and Courage",
 }
 
-// use stone(s)
-func C_0311() {
-	if Party.mStones == 0 {
-		u4_puts(D_0100)
+// The Abyss's altars take answers this long.
+const abyssAnswerLen = 12
+
+func useStones() {
+	if party.stones == 0 {
+		sayNoneOwned()
 		return
 	}
-	var bp_10 [14]byte
-	if CurMode != MOD_COM_ROOM && CurMode != MOD_DUNGEON {
-		u4_puts("No place to Use them!\n")
+	if gameMode != modeCombatRoom && gameMode != modeDungeon {
+		printText("No place to Use them!\n")
 	}
-	if CurMode != MOD_DUNGEON {
-		C_01E1()
+	if gameMode != modeDungeon {
+		useStonesOnAltar()
 		return
 	}
-	if tile_cur != 0xb0 || Party._loc != 0x18 {
-		u4_puts(D_00EE)
+	if hereTile != dngAltar || party.loc != locAbyss {
+		sayUseNoEffect()
 		return
 	}
-	if Party._z != 7 {
-		u4_puts("\nAs thou doth approach, a voice rings out: What virtue dost stem from ")
+	level := int(party.z)
+	lastLevel := len(abyssQuestions) - 1
+	if level != lastLevel {
+		printText("\nAs thou doth approach, a voice rings out: What virtue dost stem from ")
 	}
-	u4_puts(D_0284[Party._z])
-	u4_puts("?\n\n")
-	u4_gets(bp_10[:], 13)
-	Gra_CR()
-	if strnicmp(bp_10[:], D_1E98[151+int(Party._z)], 14) != 0 {
-		if bp_10[0] != 0 {
-			u4_puts(D_00EE)
+	printText(abyssQuestions[level])
+	printText("?\n\n")
+	answer := readWord(abyssAnswerLen)
+	newLine()
+	if !strings.EqualFold(answer, virtueNames[level]) {
+		if answer != "" {
+			sayUseNoEffect()
 		}
 		return
 	}
-	u4_puts("\nThe Voice says: Use thy Stone.\n\nColor:\n")
-	getsWords = stoneColors()
-	u4_gets(bp_10[:], 11)
-	Gra_CR()
-	bp_02 := 7
-	for strnicmp(bp_10[:], D_0884[bp_02], 12) != 0 {
-		bp_02--
-		if bp_02 < 0 {
-			break
-		}
-	}
-	if bp_02 == -1 {
-		if bp_10[0] != 0 {
-			u4_puts(D_00EE)
+	printText("\nThe Voice says: Use thy Stone.\n\nColor:\n")
+	stone, word := askStoneColor()
+	if stone == -1 {
+		if word != "" {
+			sayUseNoEffect()
 		}
 		return
 	}
-	if !TST_MSK8(Party.mStones, bp_02) {
-		u4_puts("\nYou have none!\n\n")
+	if !hasBit(party.stones, stone) {
+		printText("\nYou have none!\n\n")
 		return
 	}
-	if int(Party._z) != bp_02 {
-		u4_puts(D_00EE)
+	if level != stone {
+		sayUseNoEffect()
 		return
 	}
-	if Party._z == 7 {
-		C_31F4() // last phase of game
+	if level == lastLevel {
+		enterCodexChamber() // the Codex chamber
 		return
 	}
-	*D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)) = 0x20
-	u4_puts("\nThe altar changes before thyne eyes!\n")
+	*area.dungeonRoom(level, int(party.y), int(party.x)) = dngLadderDown
+	printText("\nThe altar changes before thyne eyes!\n")
 }
 
-// use key(s)
-func C_044C() {
-	if (Party.mItems>>ST_KEY_T)&1|(Party.mItems>>ST_KEY_L)&1|(Party.mItems>>ST_KEY_C)&1 != 0 {
-		u4_puts("No place to Use them!\n")
+func useKeys() {
+	if hasBit(party.items, itemKeyTruth) || hasBit(party.items, itemKeyLove) || hasBit(party.items, itemKeyCourage) {
+		printText("No place to Use them!\n")
 	} else {
-		u4_puts(D_0100)
+		sayNoneOwned()
 	}
 }
 
-func atAbyss() bool { return Party._loc == 0 && Party._x == 0xe9 && Party._y == 0xe9 }
+// atAbyss says whether the party stands at the entrance of the Abyss.
+func atAbyss() bool { return party.loc == 0 && party.x == abyssX && party.y == abyssY }
 
-// use bell
-func C_0487() {
-	if !TST_MSK(Party.mItems, ST_BELL) {
-		u4_puts(D_0100)
+// The bell, book and candle open the Abyss: used there, in that order.
+func useBell() {
+	if !hasBit(party.items, itemBell) {
+		sayNoneOwned()
 		return
 	}
 	if !atAbyss() {
-		u4_puts(D_00EE)
+		sayUseNoEffect()
 		return
 	}
-	SET_MSK(&Party.mItems, ST_USE_BELL)
-	u4_puts("The Bell rings on and on!\n")
+	setBit(&party.items, itemBellUsed)
+	printText("The Bell rings on and on!\n")
 }
 
-// use book
-func C_04C0() {
-	if !TST_MSK(Party.mItems, ST_BOOK) {
-		u4_puts(D_0100)
+func useBook() {
+	if !hasBit(party.items, itemBook) {
+		sayNoneOwned()
 		return
 	}
-	if !atAbyss() || !TST_MSK(Party.mItems, ST_USE_BELL) {
-		u4_puts(D_00EE)
+	if !atAbyss() || !hasBit(party.items, itemBellUsed) {
+		sayUseNoEffect()
 		return
 	}
-	SET_MSK(&Party.mItems, ST_USE_BOOK)
-	u4_puts("The words resonate with the ringing!\n")
+	setBit(&party.items, itemBookUsed)
+	printText("The words resonate with the ringing!\n")
 }
 
-// use candle
-func C_0501() {
-	if !TST_MSK(Party.mItems, ST_CANDLE) {
-		u4_puts(D_0100)
+func useCandle() {
+	if !hasBit(party.items, itemCandle) {
+		sayNoneOwned()
 		return
 	}
-	if !atAbyss() || !TST_MSK(Party.mItems, ST_USE_BOOK) {
-		u4_puts(D_00EE)
+	if !atAbyss() || !hasBit(party.items, itemBookUsed) {
+		sayUseNoEffect()
 		return
 	}
-	SET_MSK(&Party.mItems, ST_USE_CANDLE)
-	u4_puts("As you light the Candle the Earth Trembles!\n")
-	sound(6)
-	shakefx()
+	setBit(&party.items, itemCandleUsed)
+	printText("As you light the Candle the Earth Trembles!\n")
+	sound(soundMonsterHit)
+	shakeScreen()
 }
 
-// use horn
-func C_0553() {
-	if !TST_MSK(Party.mItems, ST_HORN) {
-		u4_puts(D_0100)
+// hornTurns is how long the horn keeps the monsters away.
+const hornTurns = 10
+
+func useHorn() {
+	if !hasBit(party.items, itemHorn) {
+		sayNoneOwned()
 		return
 	}
-	if Party._loc != 0 {
-		u4_puts(D_00EE)
+	if party.loc != 0 {
+		sayUseNoEffect()
 		return
 	}
-	u4_puts("The Horn sounds an eerie tone!\n")
-	spell_sta = 1
-	spell_cnt = 10
-	dspl_Stats()
+	printText("The Horn sounds an eerie tone!\n")
+	activeSpell = effectHorn
+	spellTurns = hornTurns
+	showStats()
 }
 
-// use wheel
-func C_058C() {
-	if !TST_MSK(Party.mItems, ST_WHEEL) {
-		u4_puts(D_0100)
+// The wheel mends a ship of hull exactly wheelHull to a perfect one.
+const (
+	wheelHull   = 50
+	perfectHull = 99
+)
+
+func useWheel() {
+	if !hasBit(party.items, itemWheel) {
+		sayNoneOwned()
 		return
 	}
-	if Party._loc != 0 || Party._tile > TIL_13 || Party._ship != 50 {
-		u4_puts(D_00EE)
+	if party.loc != 0 || party.tile > tileShipSouth || party.hull != wheelHull {
+		sayUseNoEffect()
 		return
 	}
-	u4_puts("Once mounted, the Wheel glows with a blue light!\n")
-	Party._ship = 99
-	dspl_Stats()
+	printText("Once mounted, the Wheel glows with a blue light!\n")
+	party.hull = perfectHull
+	showStats()
 }
 
-// use skull
-func C_05CE() {
-	if !TST_MSK(Party.mItems, ST_SKULL) {
-		u4_puts(D_0100)
-		return
-	}
-	shake3 := func() {
-		sound(6)
-		shakefx()
-		Gra_09()
-		sound(6)
-		shakefx()
-		Gra_09()
-		sound(6)
-		shakefx()
-	}
-	if !atAbyss() {
-		u4_puts("\nYou hold the evil Skull of Mondain the Wizard aloft....\n")
-		shake3()
-		n := &D_8742._npc
-		if CurMode >= MOD_COMBAT {
-			for b := 31; b >= 0; b-- {
-				if n._tile[b] != TIL_5E {
-					n._gtile[b] = 0
-					n._tile[b] = 0
-				}
-			}
-			for b := 15; b >= 0; b-- {
-				if Fighters._tile[b] != TIL_5E {
-					Fighters._gtile[b] = 0
-					Fighters._tile[b] = 0
-				}
-			}
-		} else {
-			b := 31
-			if Party._loc == 0 {
-				b = 7
-			}
-			for ; b >= 0; b-- {
-				if n._tile[b] != TIL_5E {
-					n._gtile[b] = 0
-					n._tile[b] = 0
-				}
-			}
+// The skull: raised, it slays everyone in sight but Lord British, at a cost to every
+// virtue; cast into the Abyss, it raises them all.
+const (
+	skullKarmaCost  = 5
+	skullKarmaBonus = 10
+	outdoorPeople   = 8 // the people slots in use on the world map
+)
+
+// slayAllBut clears every person of the list but Lord British.
+func slayAllBut(tile, baseTile []uint8) {
+	for i := len(tile) - 1; i >= 0; i-- {
+		if tile[i] != tileLordBritish {
+			baseTile[i] = 0
+			tile[i] = 0
 		}
-		t_callback()
-		for _, k := range pKarmas {
-			karma_dec(k, 5)
-		}
-		dspl_Stats()
-	} else {
-		u4_puts("\nYou cast the Skull of Mondain into the Abyss!\n")
-		SET_MSK(&Party.mItems, ST_CAST_SKULL)
-		for _, k := range pKarmas {
-			karma_inc(k, 10)
-		}
-		shake3()
 	}
-	RST_MSK(&Party.mItems, ST_SKULL)
 }
 
-var D_0434 = []struct {
-	_00 string
-	_02 func()
+func useSkull() {
+	if !hasBit(party.items, itemSkull) {
+		sayNoneOwned()
+		return
+	}
+	quake := func() {
+		sound(soundMonsterHit)
+		shakeScreen()
+		invertMap()
+		sound(soundMonsterHit)
+		shakeScreen()
+		invertMap()
+		sound(soundMonsterHit)
+		shakeScreen()
+	}
+	if atAbyss() {
+		printText("\nYou cast the Skull of Mondain into the Abyss!\n")
+		setBit(&party.items, itemSkullDestroyed)
+		for _, k := range karmas {
+			raiseKarma(k, skullKarmaBonus)
+		}
+		quake()
+		clearBit(&party.items, itemSkull)
+		return
+	}
+	printText("\nYou hold the evil Skull of Mondain the Wizard aloft....\n")
+	quake()
+	people := &area.people
+	switch {
+	case gameMode >= modeCombat:
+		slayAllBut(people.tile[:], people.baseTile[:])
+		slayAllBut(fighters.tile[:], fighters.baseTile[:])
+	case party.loc == 0:
+		slayAllBut(people.tile[:outdoorPeople], people.baseTile[:outdoorPeople])
+	default:
+		slayAllBut(people.tile[:], people.baseTile[:])
+	}
+	redraw()
+	for _, k := range karmas {
+		lowerKarma(k, skullKarmaCost)
+	}
+	showStats()
+	clearBit(&party.items, itemSkull)
+}
+
+// usable are the words the Use command knows.
+var usable = []struct {
+	word string
+	use  func()
 }{
-	{"stone", C_0311},
-	{"stones", C_0311},
-	{"bell", C_0487},
-	{"book", C_04C0},
-	{"candle", C_0501},
-	{"key", C_044C},
-	{"keys", C_044C},
-	{"horn", C_0553},
-	{"wheel", C_058C},
-	{"skull", C_05CE},
+	{"stone", useStones},
+	{"stones", useStones},
+	{"bell", useBell},
+	{"book", useBook},
+	{"candle", useCandle},
+	{"key", useKeys},
+	{"keys", useKeys},
+	{"horn", useHorn},
+	{"wheel", useWheel},
+	{"skull", useSkull},
 }
 
-func CMD_Use() { /*C_07AE*/
-	var bp_0e [12]byte
-	u4_puts("Use which item:\n")
+func cmdUse() {
+	printText("Use which item:\n")
 	getsWords = usableItems()
-	u4_gets(bp_0e[:], 11)
-	Gra_CR()
-	for _, u := range D_0434 {
-		if strnicmp(bp_0e[:], u._00, 12) == 0 {
-			u._02()
+	word := readWord(useWordLen)
+	newLine()
+	for _, u := range usable {
+		if strings.EqualFold(word, u.word) {
+			u.use()
 			return
 		}
 	}
-	u4_puts("Not a Usable item!\n")
+	printText("Not a Usable item!\n")
 }

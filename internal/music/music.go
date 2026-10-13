@@ -65,7 +65,7 @@ func (s *seq) render(l, r []float32) {
 			for s.pos < len(s.events) && s.events[s.pos].tick*rate/tickHz <= s.at {
 				e := s.events[s.pos]
 				if e.status != 0 {
-					s.synth.ProcessMidiMessage(int32(e.status&0xf), int32(e.status&0xf0), int32(e.d1), int32(e.d2))
+					s.synth.ProcessMidiMessage(int32(midiChannel(e.status)), int32(midiMessage(e.status)<<4), int32(e.d1), int32(e.d2))
 				}
 				s.pos++
 			}

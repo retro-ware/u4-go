@@ -1,14 +1,15 @@
 package u4
 
-// The C library and runtime pieces the game uses: setjmp/longjmp on D_9458, string helpers
-// on zero-terminated byte buffers.
+// The C library pieces the game still uses: the jump back to the command loop, and the
+// zero-terminated strings of its records.
 
 import "strconv"
 
-// jmpMain is longjmp(D_9458, -1): back to the setjmp in main's loop (or around DNG_main).
-type jmpMain struct{}
+// backToCommandsPanic unwinds to the command loop (main's, or dungeonLoop's) when the
+// party's situation changes under the running command.
+type backToCommandsPanic struct{}
 
-func longjmp_D_9458() { panic(jmpMain{}) }
+func backToCommands() { panic(backToCommandsPanic{}) }
 
 // strlen of a C string in a byte buffer.
 func strlen(b []byte) int {

@@ -1,427 +1,411 @@
 package u4
 
-// Port of U4_COMBA.C (unsigned char): the combat loop, attacks and damage.
+// The battle: the party members' turns, their attacks, and the damage done to monsters.
 
-/*C_59D5*/
-func COM_GetFighterId(_x, _y uint8) int {
-	si := 15
-	for ; si >= 0; si-- {
-		if Fighters._tile[si] != 0 && Combat._npcX[si] == _x && Combat._npcY[si] == _y {
+// monsterAt is the monster at (x, y) on the battlefield, or -1.
+func monsterAt(x, y uint8) int {
+	for i := len(fighters.tile) - 1; i >= 0; i-- {
+		if fighters.tile[i] != 0 && battlefield.monsterX[i] == x && battlefield.monsterY[i] == y {
+			return i
+		}
+	}
+	return -1
+}
+
+// partyWipedOut says whether no party member lives.
+func partyWipedOut() bool {
+	for i := int(party.size) - 1; i >= 0; i-- {
+		if isAlive(i) {
+			return false
+		}
+	}
+	return true
+}
+
+// combatOver says whether the battle has ended: no party member is left on the field, or
+// (but in a dungeon room, which the party must leave) no monster.
+func combatOver() bool {
+	membersLeft := false
+	for i := 7; i >= 0; i-- {
+		if fighters.memberTile[i] != 0 {
+			membersLeft = true
 			break
 		}
 	}
-	return si
-}
-
-// party all out ?
-func C_5A04() int {
-	for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-		if isCharaAlive(si) {
-			return 0
+	if !membersLeft {
+		return true
+	}
+	if gameMode == modeCombatRoom {
+		return false
+	}
+	for i := len(fighters.tile) - 1; i >= 0; i-- {
+		if fighters.tile[i] != 0 {
+			return false
 		}
 	}
-	return 1
+	return true
 }
 
-/*C_5A28*/
-func IsCombatEnded() int {
-	si := 7
-	for ; si >= 0; si-- {
-		if Fighters._chtile[si] != 0 {
-			break
-		}
-	}
-	if si == -1 {
-		return 1
-	}
-	if CurMode == MOD_COM_ROOM {
-		return 0
-	}
-	for si = 15; si >= 0; si-- {
-		if Fighters._tile[si] != 0 {
-			return 0
-		}
-	}
-	return 1
-}
-
-/*C_5A6B*/
-func COM_main() {
-	var si uint16
-	var bp_04 uint16
-
-	u_kbflush()
-	bp_04 = 0
-	D_96EE = 0
-	D_96F4 = 0
+// fight runs the battle: each party member's command in turn, then the monsters', until it
+// ends.
+func fight() {
+	var key, lastKey uint16
+	flushKeys()
+	fleeDirX, fleeDirY = 0, 0
 	for {
-		// activeChara (int) < f_1d8 (unsigned): unsigned compare
-		for activeChara = 0; uint16(activeChara) < Party.f_1d8 && IsCombatEnded() == 0; activeChara++ {
-			/*C_5A9E*/
-			a := int(activeChara)
-			if Fighters._chtile[a] != 0 && isCharaConscious(a) {
-				D_95C8 = 4
-				Gra_11(a)
-				activeCharaX = int16(Combat._charaX[a])
-				activeCharaY = uint16(Combat._charaY[a])
-				u4_puts(cstr(Party.chara[a]._name[:]))
-				u4_puts(" with ")
-				u4_puts(D_1E98[37+int(Party.chara[a]._weapon)])
-				Gra_CR()
-				u4_putc(0x10)
-				D_95C8 = 2
-				C_3C54()
+		for activeMember = 0; uint16(activeMember) < party.size && !combatOver(); activeMember++ {
+			a := int(activeMember)
+			if fighters.memberTile[a] != 0 && isConscious(a) {
+				cursorBlink = 4
+				invertStatusLine(a)
+				cursorBoxX = int16(battlefield.memberX[a])
+				cursorBoxY = uint16(battlefield.memberY[a])
+				printText(cstr(party.members[a].name[:]))
+				printText(" with ")
+				printText(weaponNames[int(party.members[a].weapon)])
+				newLine()
+				printChar(promptChar)
+				cursorBlink = 2
+				drawCombat()
 				ask(pCmd)
-				u_delay(25, 1)
-				if u_kbhit() != 0 {
-					si = uint16(u_kbread())
-				} else {
-					si = KBD_SPACE
+				const commandSeconds = 25 // a member who waits this long passes
+				waitSeconds(commandSeconds, true)
+				key = keySpace
+				if keyWaiting() {
+					key = uint16(readKey())
 				}
-				if u4_isupper(int(si & 0xff)) {
-					si = (si & 0xff00) | uint16(u4_lower(int(si&0xff)))
-				}
-				switch si {
-				case KBD_SPACE:
-					w_Pass()
-				case KBD_UP_, KBD_UP:
-					C_7B89()
-				case KBD_LEFT_, KBD_LEFT:
-					C_7BFD()
-				case KBD_DOWN_, KBD_DOWN:
-					C_7BAF()
-				case KBD_RIGHT_, KBD_RIGHT:
-					C_7BD5()
-				case KBD_A:
-					C_61D1() // (A)ttack(combat)
-				case KBD_C:
-					CMD_Cast()
-				case KBD_G:
-					C_73B8() // (G)et chest(combat)
-				case KBD_R:
-					CMD_Ready()
-				case KBD_U:
-					CMD_Use()
-				case KBD_V:
-					CMD_Volume()
-				case KBD_Z:
-					CMD_Ztats()
-				case KBD_B, KBD_D, KBD_E, KBD_F, KBD_H, KBD_I, KBD_J, KBD_K, KBD_L, KBD_M, KBD_N,
-					KBD_O, KBD_P, KBD_Q, KBD_S, KBD_T, KBD_W, KBD_X, KBD_Y:
-					w_NotHere()
-				case KBD_CTRL_S:
-					if bp_04 == KBD_ALT_Z {
-						C_1C21()
+				key = uint16(lowerKey(int(key)))
+				switch key {
+				case keySpace:
+					sayPass()
+				case keyUpAlt, keyUp:
+					cmdNorthInCombat()
+				case keyLeftAlt, keyLeft:
+					cmdWestInCombat()
+				case keyDownAlt, keyDown:
+					cmdSouthInCombat()
+				case keyRightAlt, keyRight:
+					cmdEastInCombat()
+				case keyA:
+					cmdAttackInCombat()
+				case keyC:
+					cmdCast()
+				case keyG:
+					cmdGetInCombat()
+				case keyR:
+					cmdReady()
+				case keyU:
+					cmdUse()
+				case keyV:
+					cmdVolume()
+				case keyZ:
+					cmdZtats()
+				case keyB, keyD, keyE, keyF, keyH, keyI, keyJ, keyK, keyL, keyM, keyN,
+					keyO, keyP, keyQ, keyS, keyT, keyW, keyX, keyY:
+					sayNotHere()
+				case keyCtrlS:
+					if lastKey == keyAltZ {
+						showKarmas()
 						break
 					}
 					fallthrough
 				default:
-					u4_puts("Bad command\n")
-					sound(2)
-					Gra_11(a)
-					activeChara--
+					printText("Bad command\n")
+					sound(soundBadCommand)
+					invertStatusLine(a)
+					activeMember-- // the same member again
 					continue
 				}
-				Gra_11(a)
-				activeCharaX = -1
-				dspl_Stats()
+				invertStatusLine(a)
+				cursorBoxX = -1
+				showStats()
 			}
-			if D_07F8 == 0 {
-				D_07F8 = 1
-				activeChara--
+			if !turnPasses {
+				turnPasses = true
+				activeMember-- // the command took no time: the same member again
 			} else {
-				C_5D14()
+				endMemberTurn()
 			}
-			/*C_5C09*/
 		}
-		/*C_5CEF:*/
-		C_9F7B()
-		bp_04 = si
-		if IsCombatEnded() != 0 {
+		monstersTurn()
+		lastKey = key
+		if combatOver() {
 			break
 		}
 	}
-	if C_5A04() == 0 {
-		C_837A()
+	if !partyWipedOut() {
+		endCombat()
 	}
-	D_07F8 = 1
+	turnPasses = true
 }
 
-func C_5D14() {
-	a := int(activeChara)
-	if Fighters._chtile[a] == 0 {
+// endMemberTurn ends the active member's turn: a random event, Quickness's second turn, a
+// sleeper waking (one time in eight), and a ration eaten.
+func endMemberTurn() {
+	a := int(activeMember)
+	if fighters.memberTile[a] == 0 {
 		return
 	}
-	if isCharaConscious(a) {
-		C_9209()
+	if isConscious(a) {
+		groundEvent()
 	}
-	if !isCharaAlive(a) {
-		Fighters._chtile[a] = 0
-	} else if isCharaConscious(a) && spell_sta == 'Q' && U4_RND1(1) != 0 {
-		// Quickness!
-		activeChara--
+	member := &party.members[a]
+	switch {
+	case !isAlive(a):
+		fighters.memberTile[a] = 0
+	case isConscious(a) && activeSpell == effectQuickness && randomBits(1) != 0:
+		activeMember-- // another turn
 		return
-	} else if Party.chara[a]._stat == 'S' && U4_RND1(7) == 0 {
-		Party.chara[a]._stat = 'G'
-		Fighters._chtile[a] = uint8(C_0ACF(a))
-		D_944A[a] = Fighters._chtile[a]
-		dspl_Stats()
+	case member.status == statusAsleep && randomBits(7) == 0:
+		member.status = statusGood
+		fighters.memberTile[a] = uint8(memberShape(a))
+		memberFrame[a] = fighters.memberTile[a]
+		showStats()
 	}
-	food_dec(1)
+	eatFood(1)
 }
 
-/*C_5DAB*/
-// damage is generic: callers pass int (RND) or uint8; C truncates to unsigned char.
-func COM_DoDamage[T ~int | ~uint8](_npcId, _charaId int, _damage_ T) {
-	_damage := uint8(_damage_)
-	u4_puts(C_1513(Fighters._tile[_npcId]))
-	u4_putc(' ')
+// damageMonster hurts monster by damage (taken as a byte), dealt by member (-1: none, who
+// then earns experience for a kill), and tells how it fares. Lord British can't be hurt.
+func damageMonster(monster, member, damage int) {
+	hurt := uint8(damage)
+	printText(creatureName(fighters.tile[monster]))
+	printChar(' ')
 	killed := false
-	if Fighters._tile[_npcId] != TIL_5E {
-		// C: (HP -= damage) < 0 on an unsigned char; read as the intended borrow test.
-		killed = Fighters._HP[_npcId] < _damage
-		Fighters._HP[_npcId] -= _damage
+	if fighters.tile[monster] != tileLordBritish {
+		killed = fighters.hp[monster] < hurt
+		fighters.hp[monster] -= hurt
 	}
+	strength := int(monsterStrength[monsterIndex(fighters.tile[monster])])
 	if killed {
-		u4_puts("Killed!\n")
-		if _charaId != -1 {
-			di := int(D_23D2[C_7C25(Fighters._tile[_npcId])])/16 + 1
-			XP_inc(_charaId, di)
-			u4_puts("Exp. ")
-			u4_putl(int32(di), 1, ' ')
-			Gra_CR()
+		printText("Killed!\n")
+		if member != -1 {
+			xp := strength/16 + 1
+			addXP(member, xp)
+			printText("Exp. ")
+			printNumber(int32(xp), 1, ' ')
+			newLine()
 		}
-		Fighters._tile[_npcId] = 0
+		fighters.tile[monster] = 0
+		return
+	}
+	half, quarter := strength/2, strength/4
+	hp := int(fighters.hp[monster])
+	switch {
+	case hp < fleeingHP:
+		printText("Fleeing!\n")
+	case hp < quarter:
+		printText("Critical!\n")
+	default:
+		newLine()
+		switch {
+		case hp < half:
+			printText("Heavily ")
+		case hp < half+quarter:
+			printText("Lightly ")
+		default:
+			printText("Barely ")
+		}
+		printText("Wounded!\n")
+	}
+}
+
+// advanceHit moves the missile (hitX, hitY) on by (dx, dy), unless that leaves the field or
+// meets something that stops missiles; it reports whether it moved.
+func advanceHit(dx, dy uint8) bool {
+	x, y := hitX+dx, hitY+dy
+	if x >= viewSize || y >= viewSize {
+		return false
+	}
+	tile := *combatTile(int(y), int(x))
+	if tile == tileSecretDoor {
+		return false
+	}
+	// Water, shores, the barrier and monsters let missiles pass; other tiles if walkable.
+	isTerrain := tile <= tilePirateWest && tile > tileShallowWater && tile != tileBarrier
+	isShore := tile >= tileShoreSouthWest && tile <= tileShoreNorthEast
+	if isTerrain && !isShore && !isWalkable(tile) {
+		return false
+	}
+	hitX, hitY = x, y
+	return true
+}
+
+// returnAxe flies the magic axe back to its thrower, over reach tiles.
+func returnAxe(reach int) {
+	if party.members[activeMember].weapon != weaponMagicAxe || reach < 2 {
+		return
+	}
+	dx := signOf(int16(battlefield.memberX[activeMember]) - int16(hitX))
+	dy := signOf(int16(battlefield.memberY[activeMember]) - int16(hitY))
+	hitTile = tileMissile
+	for ; reach != 0; reach-- {
+		advanceHit(uint8(dx), uint8(dy))
+		drawCombat()
+	}
+	hitTile = 0
+}
+
+// missed reports a miss (reach tiles out); burning oil sets a fire where it lands.
+func missed(reach int) {
+	if reach == 0 {
+		sound(soundMiss)
+	}
+	hitTile = 0
+	printText("Missed!\n")
+	if party.members[activeMember].weapon == weaponOil && hitX < viewSize && hitY < viewSize && *combatTile(int(hitY), int(hitX)) >= tileSwamp {
+		*combatTile(int(hitY), int(hitX)) = tileFireField
+	}
+	drawCombat()
+	returnAxe(reach)
+}
+
+// tryHit is the active member's blow at monster, reach tiles away: it may miss (the clumsy
+// do; and in the Abyss only magic weapons hit), else does damage up to the member's
+// strength plus the weapon's.
+func tryHit(monster, reach int) {
+	member := &party.members[activeMember]
+	if party.loc == locAbyss && member.weapon < weaponMagicAxe {
+		missed(reach)
+		return
+	}
+	if member.weapon == weaponMagicWand {
+		hitTile = tileMagicSphere
 	} else {
-		loc_B := int(D_23D2[C_7C25(Fighters._tile[_npcId])]) / 2
-		loc_A := loc_B         // 50% HP
-		loc_B >>= 1            // 25% HP
-		loc_C := loc_B + loc_A // 75% HP
-		loc_D := int(Fighters._HP[_npcId])
-		if loc_D < 24 {
-			u4_puts("Fleeing!\n")
-		} else if loc_D < loc_B {
-			u4_puts("Critical!\n")
-		} else {
-			Gra_CR()
-			if loc_D < loc_A {
-				u4_puts("Heavily ")
-			} else if loc_D < loc_C {
-				u4_puts("Lightly ")
-			} else {
-				u4_puts("Barely ")
-			}
-			u4_puts("Wounded!\n")
-		}
+		hitTile = tileHitFlash
 	}
-}
-
-/*C_5EA2*/
-func COM_CheckHitable(_dir_x, _dir_y uint8) int {
-	loc_C := _dir_x + hit_x
-	loc_A := _dir_y + hit_y
-	if loc_C > 10 || loc_A > 10 {
-		return 0
-	}
-	loc_B := int(*Combat_MAP(int(loc_A), int(loc_C)))
-	if loc_B == TIL_49 {
-		return 0
-	}
-	if loc_B <= TIL_80 && loc_B > TIL_02 && loc_B != TIL_48 {
-		if loc_B < TIL_31 || loc_B > TIL_34 {
-			if !C_2999(uint8(loc_B)) {
-				return 0
-			}
-		}
-	}
-	hit_x = loc_C
-	hit_y = loc_A
-	return 1
-}
-
-/*C_5F26*/
-func DrawBlow(_range int) {
-	if Party.chara[activeChara]._weapon != 11 || _range < 2 {
+	if member.dexterity < 40 && uint16(randomBits(255)) > member.dexterity+128 {
+		missed(reach)
 		return
 	}
-	bp_02 := u4_sign(int16(Combat._charaX[activeChara]) - int16(hit_x))
-	bp_04 := u4_sign(int16(Combat._charaY[activeChara]) - int16(hit_y))
-	hit_tile = TIL_4D
-	for _range != 0 {
-		COM_CheckHitable(uint8(bp_02), uint8(bp_04))
-		C_3C54()
-		_range--
+	under := combatTile(int(battlefield.monsterY[monster]), int(battlefield.monsterX[monster]))
+	if member.weapon == weaponOil && *under >= tileSwamp {
+		*under = tileFireField
 	}
-	hit_tile = 0
+	most := int(int16(int(member.strength) + int(weaponDamage[member.weapon])))
+	damage := safeMod(randomBits(255), min(most, 255))
+	drawCombat()
+	sound(soundMonsterHit)
+	hitTile = 0
+	damageMonster(monster, int(activeMember), damage)
+	returnAxe(reach)
 }
 
-/*C_5F9D*/
-func w_missed(_range int) {
-	if _range == 0 {
-		sound(4)
-	}
-	hit_tile = 0
-	u4_puts("Missed!\n")
-	if Party.chara[activeChara]._weapon == 9 && hit_x < 11 && hit_y < 11 && *Combat_MAP(int(hit_y), int(hit_x)) >= TIL_03 {
-		*Combat_MAP(int(hit_y), int(hit_x)) = TIL_46
-	}
-	C_3C54()
-	DrawBlow(_range)
-}
-
-/*C_6012*/
-func TryDamage(_npcId, _range int) {
-	loc_C := &Party.chara[activeChara]
-	if Party._loc == 0x18 && loc_C._weapon < 11 {
-		// abyss without good weapons
-		w_missed(_range)
-		return
-	}
-	if loc_C._weapon == 14 {
-		hit_tile = TIL_4E
-	} else {
-		hit_tile = TIL_4F
-	}
-	// dexterity test
-	if loc_C._dex < 40 && uint16(U4_RND1(0xff)) > loc_C._dex+0x80 {
-		w_missed(_range)
-		return
-	}
-	// success
-	loc_B := Combat_MAP(int(Combat._npcY[_npcId]), int(Combat._npcX[_npcId]))
-	if loc_C._weapon == 9 && *loc_B >= TIL_03 {
-		*loc_B = TIL_46
-	}
-	// damage points
-	loc_A := int(int16(loc_C._str))
-	loc_A = int(int16(loc_A + int(D_2450[loc_C._weapon])))
-	loc_A = SafeModulo(U4_RND1(0xff), u4_min(loc_A, 0xff))
-	C_3C54()
-	sound(6)
-	hit_tile = 0
-	COM_DoDamage(_npcId, int(activeChara), loc_A)
-	DrawBlow(_range)
-}
-
-// projectile weapon?
-func C_60F1(_dir_x, _dir_y int) {
-	loc_D := 11
-	loc_C := 0
-	loc_B := 0 // note: stays uninitialised in C when the oil range is '0' (the loop is never entered)
-	loc_A := &Party.chara[activeChara]
-	// -- For OIL, ask range --
-	if loc_A._weapon == 9 {
-		loc_D = AskLetter("Range:\x12\x12\b", '0', '9')
-		loc_D -= '0'
-		if loc_D < 0 {
+// shoot fires the active member's missile weapon toward (dx, dy): up to 11 tiles, oil as far
+// as asked. Daggers and oil are thrown, and used up.
+func shoot(dx, dy int) {
+	member := &party.members[activeMember]
+	reach := viewSize
+	if member.weapon == weaponOil {
+		reach = askLetter("Range:"+answerRoom(2), '0', '9') - '0'
+		if reach < 0 {
 			return
 		}
 	}
-	// -- if denumbrable weapon, decrement --
-	if loc_A._weapon == 2 || loc_A._weapon == 9 {
-		if Party._weapons[loc_A._weapon] == 0 {
-			loc_A._weapon = 0
-			u4_puts("Last one!\n")
+	if member.weapon == weaponDagger || member.weapon == weaponOil {
+		if party.weapons[member.weapon] == 0 {
+			member.weapon = weaponHands
+			printText("Last one!\n")
 		} else {
-			Party._weapons[loc_A._weapon]--
+			party.weapons[member.weapon]--
 		}
 	}
-	if loc_A._weapon != 14 {
-		hit_tile = TIL_4D
+	if member.weapon == weaponMagicWand {
+		hitTile = tileMagicSphere
 	} else {
-		hit_tile = TIL_4E
+		hitTile = tileMissile
 	}
-	sound(4)
-	for ; loc_D != 0; loc_D-- {
-		if COM_CheckHitable(uint8(_dir_x), uint8(_dir_y)) == 0 {
-			w_missed(loc_C)
+	sound(soundMiss)
+	flown := 0
+	target := 0 // (oil thrown 0 tiles hits monster 0, as the original's unset variable did)
+	for ; reach != 0; reach-- {
+		if !advanceHit(uint8(dx), uint8(dy)) {
+			missed(flown)
 			return
 		}
-		loc_C++
-		C_3C54()
-		if loc_B = COM_GetFighterId(hit_x, hit_y); loc_B != -1 {
+		flown++
+		drawCombat()
+		if target = monsterAt(hitX, hitY); target != -1 {
 			break
 		}
 	}
-	hit_tile = 0
-	if loc_B == -1 {
-		w_missed(loc_C)
+	hitTile = 0
+	if target == -1 {
+		missed(flown)
 		return
 	}
-	TryDamage(loc_B, loc_C)
+	tryHit(target, flown)
 }
 
-// (A)ttack [combat]
-func C_61D1() {
-	loc_C := &Party.chara[activeChara]
-	var loc_A, loc_B int
-	AskDir("Dir: ", &loc_A, &loc_B)
-	if loc_A|loc_B == 0 {
+// cmdAttackInCombat attacks in a direction: a melee weapon the next tile (a halberd the one
+// beyond), a missile weapon, or a dagger thrown when nothing is near.
+func cmdAttackInCombat() {
+	member := &party.members[activeMember]
+	dx, dy := askDirection("Dir: ")
+	if dx == 0 && dy == 0 {
 		return
 	}
-	hit_x = Combat._charaX[activeChara]
-	hit_y = Combat._charaY[activeChara]
-
-	if D_2468[loc_C._weapon] == 0 { // is not range weapon?
-		if loc_C._weapon == 10 { // Halberd
-			hit_x += uint8(loc_A)
-			hit_y += uint8(loc_B)
-		}
-		if COM_CheckHitable(uint8(loc_A), uint8(loc_B)) != 0 {
-			hit_tile = TIL_4D
-			C_3C54()
-			hit_tile = 0
-			sound(4)
-
-			if loc_D := COM_GetFighterId(hit_x, hit_y); loc_D != -1 {
-				TryDamage(loc_D, 1)
-				return
-			}
-			if loc_C._weapon == 2 { // dagger?
-				C_60F1(loc_A, loc_B)
-				return
-			}
-		}
-		w_missed(0)
-	} else {
-		C_60F1(loc_A, loc_B)
+	hitX, hitY = battlefield.memberX[activeMember], battlefield.memberY[activeMember]
+	if weaponRanged[member.weapon] {
+		shoot(dx, dy)
+		return
 	}
+	if member.weapon == weaponHalberd {
+		hitX += uint8(dx)
+		hitY += uint8(dy)
+	}
+	if advanceHit(uint8(dx), uint8(dy)) {
+		hitTile = tileMissile
+		drawCombat()
+		hitTile = 0
+		sound(soundMiss)
+		if monster := monsterAt(hitX, hitY); monster != -1 {
+			tryHit(monster, 1)
+			return
+		}
+		if member.weapon == weaponDagger {
+			shoot(dx, dy)
+			return
+		}
+	}
+	missed(0)
 }
 
-/*C_628F*/
-func CMD_Attack() {
-	var loc_A, loc_B int
-
-	if CurMode <= MOD_BUILDING && Party.f_1dc != 0 {
-		u4_puts("Attack\n")
-		w_DriftOnly()
+// cmdAttack attacks whoever is in a direction. In a town that sets the guards and Lord
+// British on the party; attacking there, or a good creature, costs compassion, justice and
+// honor.
+func cmdAttack() {
+	if gameMode <= modeTown && party.flyingOrLight != 0 {
+		printText("Attack\n")
+		sayDriftOnly()
 		return
 	}
-
-	AskDir("Attack: ", &loc_A, &loc_B)
-	if loc_A|loc_B == 0 {
+	dx, dy := askDirection("Attack: ")
+	if dx == 0 && dy == 0 {
 		return
 	}
-	loc_C := C_0A8B(uint8(int(Party._x)+loc_A), uint8(int(Party._y)+loc_B))
-	if loc_C == -1 ||
-		D_8742._npc._tile[loc_C] == TIL_8C ||
-		D_8742._npc._tile[loc_C] == TIL_02 ||
-		D_8742._npc._tile[loc_C] == TIL_8E {
-		u4_puts("Nothing to Attack!\n")
+	target := objectAt(uint8(int(party.x)+dx), uint8(int(party.y)+dy))
+	if target == -1 {
+		printText("Nothing to Attack!\n")
 		return
 	}
-	if CurMode == MOD_BUILDING {
-		for di := 31; di >= 0; di-- {
-			if D_8742._npc._tile[di] == TIL_50 || D_8742._npc._tile[di] == TIL_5E {
-				D_8742._npc._var[di] = 0xff
-				D_8742._npc._tlkidx[di] = 0
+	switch area.people.tile[target] {
+	case tileWhirlpool, tileShallowWater, tileTwister:
+		printText("Nothing to Attack!\n")
+		return
+	}
+	if gameMode == modeTown {
+		for i := len(area.people.tile) - 1; i >= 0; i-- {
+			if area.people.tile[i] == tileGuard || area.people.tile[i] == tileLordBritish {
+				area.people.behaviour[i] = behaviourAttack
+				area.people.talkIndex[i] = 0
 			}
 		}
 	}
-	if CurMode == MOD_BUILDING || C_0AFE(D_8742._npc._tile[loc_C]) != 0 {
-		karma_dec(&Party._compa, 5)
-		karma_dec(&Party._justi, 5)
-		karma_dec(&Party._honor, 5)
+	if gameMode == modeTown || isGoodCreature(area.people.tile[target]) {
+		lowerKarma(&party.karmaCompassion, 5)
+		lowerKarma(&party.karmaJustice, 5)
+		lowerKarma(&party.karmaHonor, 5)
 	}
-	C_7DFE(loc_C)
+	startCombat(target)
 }

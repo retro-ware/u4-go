@@ -17,19 +17,60 @@ var Shift int
 
 type bios struct{ scan, ascii, shifted, ctrl byte }
 
+// BIOS scan codes of the special keys.
+const (
+	scanEscape    = 1
+	scanBackspace = 14
+	scanTab       = 15
+	scanEnter     = 28
+	scanSpace     = 57
+	scanF1        = 59 // F1..F10 follow in order
+	scanHome      = 71
+	scanUp        = 72
+	scanPageUp    = 73
+	scanLeft      = 75
+	scanRight     = 77
+	scanEnd       = 79
+	scanDown      = 80
+	scanPageDown  = 81
+	scanInsert    = 82
+	scanDelete    = 83
+)
+
+// ASCII control characters the keys type.
+const (
+	asciiEscape   = 27
+	asciiDelete   = 127
+	asciiLineFeed = 10
+)
+
 // keys not delivered through AppendInputChars (or whose BIOS word carries a scan code the
 // game tests): scan code and the ASCII byte plain / with shift / with ctrl
 var specialKeys = map[ebiten.Key]bios{
-	ebiten.KeyEscape: {0x01, 0x1b, 0x1b, 0x1b}, ebiten.KeyBackspace: {0x0e, 8, 8, 0x7f},
-	ebiten.KeyTab: {0x0f, 9, 0, 0}, ebiten.KeyEnter: {0x1c, 13, 13, 10}, ebiten.KeyNumpadEnter: {0x1c, 13, 13, 10},
-	ebiten.KeyF1: {0x3b, 0, 0, 0}, ebiten.KeyF3: {0x3d, 0, 0, 0},
-	ebiten.KeyF4: {0x3e, 0, 0, 0}, ebiten.KeyF5: {0x3f, 0, 0, 0}, ebiten.KeyF6: {0x40, 0, 0, 0},
-	ebiten.KeyF7: {0x41, 0, 0, 0}, ebiten.KeyF8: {0x42, 0, 0, 0}, ebiten.KeyF9: {0x43, 0, 0, 0},
-	ebiten.KeyF10:  {0x44, 0, 0, 0},
-	ebiten.KeyHome: {0x47, 0, '7', 0}, ebiten.KeyArrowUp: {0x48, 0, '8', 0}, ebiten.KeyPageUp: {0x49, 0, '9', 0},
-	ebiten.KeyArrowLeft: {0x4b, 0, '4', 0}, ebiten.KeyArrowRight: {0x4d, 0, '6', 0}, ebiten.KeyEnd: {0x4f, 0, '1', 0},
-	ebiten.KeyArrowDown: {0x50, 0, '2', 0}, ebiten.KeyPageDown: {0x51, 0, '3', 0}, ebiten.KeyInsert: {0x52, 0, '0', 0},
-	ebiten.KeyDelete: {0x53, 0, '.', 0},
+	ebiten.KeyEscape:      {scanEscape, asciiEscape, asciiEscape, asciiEscape},
+	ebiten.KeyBackspace:   {scanBackspace, '\b', '\b', asciiDelete},
+	ebiten.KeyTab:         {scanTab, '\t', 0, 0},
+	ebiten.KeyEnter:       {scanEnter, '\r', '\r', asciiLineFeed},
+	ebiten.KeyNumpadEnter: {scanEnter, '\r', '\r', asciiLineFeed},
+	ebiten.KeyF1:          {scanF1, 0, 0, 0},
+	ebiten.KeyF3:          {scanF1 + 2, 0, 0, 0},
+	ebiten.KeyF4:          {scanF1 + 3, 0, 0, 0},
+	ebiten.KeyF5:          {scanF1 + 4, 0, 0, 0},
+	ebiten.KeyF6:          {scanF1 + 5, 0, 0, 0},
+	ebiten.KeyF7:          {scanF1 + 6, 0, 0, 0},
+	ebiten.KeyF8:          {scanF1 + 7, 0, 0, 0},
+	ebiten.KeyF9:          {scanF1 + 8, 0, 0, 0},
+	ebiten.KeyF10:         {scanF1 + 9, 0, 0, 0},
+	ebiten.KeyHome:        {scanHome, 0, '7', 0},
+	ebiten.KeyArrowUp:     {scanUp, 0, '8', 0},
+	ebiten.KeyPageUp:      {scanPageUp, 0, '9', 0},
+	ebiten.KeyArrowLeft:   {scanLeft, 0, '4', 0},
+	ebiten.KeyArrowRight:  {scanRight, 0, '6', 0},
+	ebiten.KeyEnd:         {scanEnd, 0, '1', 0},
+	ebiten.KeyArrowDown:   {scanDown, 0, '2', 0},
+	ebiten.KeyPageDown:    {scanPageDown, 0, '3', 0},
+	ebiten.KeyInsert:      {scanInsert, 0, '0', 0},
+	ebiten.KeyDelete:      {scanDelete, 0, '.', 0},
 }
 
 // scan codes of the printable keys, by unshifted ASCII
@@ -48,13 +89,13 @@ func init() {
 	rows := []struct {
 		first byte
 		keys  string
-	}{{0x02, "1234567890-="}, {0x10, "qwertyuiop[]"}, {0x1e, "asdfghjkl;'`"}, {0x2b, "\\zxcvbnm,./"}}
+	}{{2, "1234567890-="}, {16, "qwertyuiop[]"}, {30, "asdfghjkl;'`"}, {43, "\\zxcvbnm,./"}}
 	for _, r := range rows {
 		for i := 0; i < len(r.keys); i++ {
 			asciiScan[r.keys[i]] = r.first + byte(i)
 		}
 	}
-	asciiScan[' '] = 0x39
+	asciiScan[' '] = scanSpace
 	for k, v := range map[byte]byte{'!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8',
 		'(': '9', ')': '0', '_': '-', '+': '=', '{': '[', '}': ']', ':': ';', '"': '\'', '~': '`', '|': '\\',
 		'<': ',', '>': '.', '?': '/'} {
@@ -157,7 +198,7 @@ func pollInput(g *game) {
 		}
 	} else if !altUsed { // an Alt hot key types nothing (Alt+V would be the game's V)
 		for _, r := range ebiten.AppendInputChars(nil) {
-			if r < 0x80 && r >= ' ' {
+			if r >= ' ' && r <= asciiDelete { // ASCII only
 				PushChar(byte(r))
 			}
 		}

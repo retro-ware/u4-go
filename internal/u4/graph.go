@@ -1,6 +1,6 @@
 package u4
 
-// Port of U4_GRAPH.ASM: loading the graphics driver, the screen frame, Gra_line and the
+// Port of U4_GRAPH.ASM: loading the graphics driver, the screen frame, drawLine and the
 // thunks into the driver (here: the ega package, plain pixel code).
 
 import (
@@ -8,126 +8,129 @@ import (
 	"github.com/memmaker/u4-go/internal/host"
 )
 
-// drv is the loaded EGA.DRV.
-var drv *ega.Driver
+// screen is the graphics driver (EGA.DRV, with the VGA upgrade as a mode of it).
+var screen *ega.Driver
 
-// load graphic lib: the port has the EGA driver built in; the file must still be there,
-// as the original exits (code 49h) without it.
-func C_20C1(name string) {
+// checkDriverFile insists on the driver's file: the port has the driver built in, but the
+// original stopped without it.
+func checkDriverFile(name string) {
 	if _, ok := readGameFile(name); !ok {
 		fatalf("can't open %s", name)
 	}
 }
 
-// draw game screen frame
-func C_213B() {
-	Gra_clrscr()
-	if D_943A == 1 {
-		Gra_16("start.pic", 0, nil)
-	} else {
-		Gra_16("start.ega", 0, nil)
-	}
+// drawFrame draws the screen's frame (START.EGA).
+func drawFrame() {
+	clearScreen()
+	loadPicture("start.ega", 0, nil)
 }
 
-func Gra_line(x0, y0, x1, y1, col int) { /*C_215A*/
-	if x0 != x1 && y0 != y1 {
-		C_A842(x0, y0, x1, y1) // drawLine
-		return
-	}
-	if x0 == x1 {
-		si := 0
-		if d := int16(y1 - y0); d > 0 {
-			si = 1
-		} else if d < 0 {
-			si = -1
+// drawLine ORs a line of colour onto the screen: straight lines here, slanted ones by
+// drawSlantedLine.
+func drawLine(x0, y0, x1, y1, color int) {
+	switch {
+	case x0 != x1 && y0 != y1:
+		drawSlantedLine(x0, y0, x1, y1)
+	case x0 == x1:
+		step := signInt(y1 - y0)
+		for i, y := 0, y0; i <= abs(y1-y0); i, y = i+1, y+step {
+			plotOR(y, x0, color)
 		}
-		n := int16(y1 - y0)
-		if n < 0 {
-			n = -n
-		}
-		y := y0
-		for c := uint16(n + 1); ; {
-			Gra_dot_OR(y, x0, col)
-			y += si
-			c--
-			if c == 0 {
-				break
-			}
-		}
-		return
-	}
-	si := 0
-	if d := int16(x1 - x0); d > 0 {
-		si = 1
-	} else if d < 0 {
-		si = -1
-	}
-	n := int16(x1 - x0)
-	if n < 0 {
-		n = -n
-	}
-	x := x0
-	for c := uint16(n + 1); ; {
-		Gra_dot_OR(y0, x, col)
-		x += si
-		c--
-		if c == 0 {
-			break
+	default:
+		step := signInt(x1 - x0)
+		for i, x := 0, x0; i <= abs(x1-x0); i, x = i+1, x+step {
+			plotOR(y0, x, color)
 		}
 	}
 }
 
-// ---- the driver thunks ----
+// ---- the driver's entries ----
 
-func Gra_00(y, x int)                        { drv.Gra00(y, x) } // active character square
-func Gra_01(tile, trow, srow, scol, exp int) { drv.Gra01(tile, trow, srow, scol, exp) }
-func Gra_02(h, w, tile, row, col int)        { drv.Gra02(h, w, tile, row, col) }
-func Gra_03()                                { drv.Gra03(SoundFlag != 0); present() }
-func Gra_04()                                { drv.Gra04(SoundFlag != 0); present() }
-func Gra_05(h, w int, src []byte, dst int)   { drv.Gra05(h, w, src) } // display tile map
-func Gra_dot(y, x, col int)                  { drv.Dot(y, x, col) }
-func Gra_CR()                                { txt_Y = 23; txt_X = 24; drv.CR(); histCR() }
-func Gra_09()                                { drv.Gra09() }
-func Gra_10()                                { drv.Gra10() }
-func Gra_11(a int)                           { drv.Gra11(a) }
-func Gra_12(x, y int)                        { drv.Gra12(x, y) } // (uncalled)
-func Gra_13()                                { drv.Gra13() }
-func Gra_dot_OR(y, x, col int)               { drv.DotOR(y, x, col) }
-func Gra_dot_XOR(y, x, col int)              { drv.DotXOR(y, x, col) }
-func Gra_16(name string, xoff int, mem []byte) { // display image
+func drawCursorBox(y, x int)                      { screen.DrawCursorBox(y, x) } // active character square
+func drawTileRow(tile, trow, srow, scol, exp int) { screen.DrawTileRow(tile, trow, srow, scol, exp) }
+func fillTiles(h, w, tile, row, col int)          { screen.FillTiles(h, w, tile, row, col) }
+func shakeDown()                                  { screen.ShakeDown(soundOn != 0); present() }
+func shakeUp()                                    { screen.ShakeUp(soundOn != 0); present() }
+func drawMap(h, w int, src []byte, dst int)       { screen.DrawMap(h, w, src) } // display tile map
+func plot(y, x, col int)                          { screen.Dot(y, x, col) }
+func newLine()                                    { textRow = textBottom; textCol = textLeft; screen.CR(); histCR() }
+func invertMap()                                  { screen.InvertMap() }
+func clearMap()                                   { screen.ClearMap() }
+func invertStatusLine(a int)                      { screen.InvertStatusLine(a) }
+func Gra_12(x, y int)                             { screen.InvertCell(x, y) } // (uncalled)
+func clearStatus()                                { screen.ClearStatus() }
+func plotOR(y, x, col int)                        { screen.DotOR(y, x, col) }
+func plotXOR(y, x, col int)                       { screen.DotXOR(y, x, col) }
+func loadPicture(name string, xoff int, mem []byte) { // display image
 	if mem == nil {
 		host.InWorld = false // a full-screen picture: the original layout until the next command
 	}
-	drv.Gra16(name, xoff, mem)
+	screen.LoadPicture(name, xoff, mem)
 }
-func Gra_18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
-	drv.Gra18(x0, x1, y0, y1, y0p, y1p, col, erase)
+func fillQuad(x0, x1, y0, y1, y0p, y1p, col, erase int) {
+	screen.FillQuad(x0, x1, y0, y1, y0p, y1p, col, erase)
 }
-func Gra_animSpit()         { drv.AnimSpit() }
-func Gra_clrscr()           { drv.ClrScr() }
-func Gra_animFlow(tile int) { drv.AnimFlow(tile) }
-func Gra_animFlag()         { drv.AnimFlag() }
-func Gra_putchar(c uint8)   { drv.PutChar(int(txt_Y), int(txt_X), c) }
+func flickerFlames()    { screen.FlickerFlames() }
+func clearScreen()      { screen.Clear() }
+func flowTile(tile int) { screen.FlowTile(tile) }
+func waveFlags()        { screen.WaveFlags() }
+func putGlyph(c uint8)  { screen.PutChar(int(textRow), int(textCol), c) }
 
-func Gra_17() {
-	if drv.IsVGA() { // the VGA patch's infinity is rune_0
-		drv.Gra17("rune_0.ega")
-	} else if D_943A == 1 {
-		drv.Gra17("rune_5.pic")
+// showInfinity opens the map window onto the symbol of infinity (RUNE_5).
+func showInfinity() {
+	if screen.IsVGA() { // the VGA patch's infinity is rune_0
+		screen.OpenDoors("rune_0.ega")
 	} else {
-		drv.Gra17("rune_5.ega")
+		screen.OpenDoors("rune_5.ega")
 	}
 }
 
-// draw the ankh
-func Gra_19() {
+// updateAnkh draws the ankh on the status line from the mastered virtues.
+func updateAnkh() {
 	var k [8]uint16
-	for i, p := range pKarmas {
+	for i, p := range karmas {
 		k[i] = *p
 	}
-	drv.Gra19(k)
+	screen.BuildAnkh(k)
 }
 
-func Gra_init() {
-	drv.Init(driverExit)
+func initDriver() {
+	screen.Init(driverExit)
+}
+
+// drawSlantedLine ORs a slanted line in colour 3 from (x0, y0) to (x1, y1), stepping along
+// the longer axis (Bresenham's way).
+func drawSlantedLine(x0, y0, x1, y1 int) {
+	const color = 3
+	x, y := x0, y0
+	stepX, stepY := signInt(x1-x0), signInt(y1-y0)
+	width, height := abs(x1-x0), abs(y1-y0)
+	if width < height {
+		err := height / 2
+		for {
+			plotOR(y, x, color)
+			y += stepY
+			if err -= width; err <= 0 {
+				x += stepX
+				err += height
+			}
+			if y == y1 {
+				break
+			}
+		}
+	} else {
+		err := width / 2
+		for {
+			plotOR(y, x, color)
+			x += stepX
+			if err -= height; err <= 0 {
+				y += stepY
+				err += width
+			}
+			if x == x1 {
+				break
+			}
+		}
+	}
+	plotOR(y, x, color)
 }

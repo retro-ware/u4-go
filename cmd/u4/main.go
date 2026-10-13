@@ -28,6 +28,14 @@ import (
 )
 
 // gameFile says whether name is one of the game's data files.
+
+// The blank saves' sizes: a people table (eight arrays of 32), a dungeon level (8x8 squares
+// on 8 levels).
+const (
+	peopleTableSize  = 8 * 32
+	dungeonLevelSize = 8 * 8 * 8
+)
+
 func gameFile(name string) bool {
 	switch strings.ToUpper(filepath.Ext(name)) {
 	case ".EGA", ".PIC", ".CON", ".DNG", ".TLK", ".ULT", ".MAP", ".NEW", ".DRV", ".CGA", ".EGZ":
@@ -164,8 +172,8 @@ func blankSaves(game, save string) error {
 		return err
 	}
 	for name, b := range map[string][]byte{
-		"PARTY.SAV": party, "MONSTERS.SAV": make([]byte, 0x100),
-		"OUTMONST.SAV": make([]byte, 0x100), "DNGMAP.SAV": make([]byte, 0x200),
+		"PARTY.SAV": party, "MONSTERS.SAV": make([]byte, peopleTableSize),
+		"OUTMONST.SAV": make([]byte, peopleTableSize), "DNGMAP.SAV": make([]byte, dungeonLevelSize),
 	} {
 		p := filepath.Join(save, name)
 		if _, err := os.Stat(p); os.IsNotExist(err) {

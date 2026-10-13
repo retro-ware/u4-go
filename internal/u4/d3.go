@@ -1,7 +1,8 @@
 package u4
 
-// Port of U4_3D.C: the dungeon's first person view, drawn as wire frames with the driver's
-// Gra_18 quads and lines, and the monsters' sprites scaled by distance.
+// The dungeon's first person view: walls, doors, ladders and holes drawn as lines and
+// filled quads by depth (0, the party's room, to 3), and the monsters' and objects' sprites
+// scaled by distance.
 
 import (
 	"time"
@@ -9,527 +10,452 @@ import (
 	"github.com/memmaker/u4-go/internal/host"
 )
 
-var Wall_x0 = [6]uint8{0x08, 0x28, 0x48, 0x58, 0x5F, 0x00} /*D_2D74*/
-var Wall_x1 = [6]uint8{0xB7, 0x97, 0x77, 0x67, 0x60, 0x00} /*D_2D7A*/
-var Wall_y0 = [6]uint8{0x08, 0x28, 0x48, 0x58, 0x5F, 0x00} /*D_2D80*/
-var Wall_y1 = [6]uint8{0xB7, 0x97, 0x77, 0x67, 0x60, 0x00} /*D_2D86*/
-
-var LDoor_x0 = [4]uint8{0x08, 0x30, 0x4C, 0x5A} /*D_2D8C*/
-var LDoor_x1 = [4]uint8{0x18, 0x40, 0x54, 0x5C} /*D_2D90*/
-var RDoor_x0 = [4]uint8{0xB7, 0x8F, 0x72, 0x64} /*D_2D94*/
-var RDoor_x1 = [4]uint8{0xA7, 0x7F, 0x6A, 0x62} /*D_2D98*/
-var Door_y0 = [4]uint8{0x34, 0x48, 0x56, 0x5A}  /*D_2D9C*/
-var Door_y0p = [4]uint8{0x3D, 0x51, 0x5B, 0x5F} /*D_2DA0*/
-var Door_y1 = [4]uint8{0xB7, 0x8F, 0x73, 0x65}  /*D_2DA4*/
-var Door_y1p = [4]uint8{0xA7, 0x7F, 0x6B, 0x62} /*D_2DA8*/
-var D_2DAC = [4]uint8{0x08, 0x30, 0x4C, 0x5A}
-var D_2DB0 = [4]uint8{0x18, 0x40, 0x54, 0x5D}
-var D_2DB4 = [4]uint8{0xB7, 0x8F, 0x73, 0x65}
-var D_2DB8 = [4]uint8{0xA7, 0x7F, 0x6B, 0x62}
-var D_2DBC = [4]uint8{0x35, 0x48, 0x55, 0x5C}
-var D_2DC0 = [4]uint8{0x3C, 0x50, 0x5A, 0x5D}
-var D_2DC4 = [4]uint8{0x8B, 0x78, 0x6A, 0x62}
-var D_2DC8 = [4]uint8{0x83, 0x70, 0x65, 0x61}
-var Ladder_x0 = [4]uint8{0x48, 0x54, 0x5C, 0x5F} /*D_2DCC*/
-var Ladder_x1 = [4]uint8{0x77, 0x6B, 0x63, 0x60} /*D_2DD0*/
-var D_2DD4 = [4]uint8{0x10, 0x38, 0x50, 0x5D}    // up ladder rung 1 y
-var D_2DD8 = [4]uint8{0x30, 0x48, 0x56, 0x5E}    // up ladder rung 2 y
-var D_2DDC = [4]uint8{0x50, 0x58, 0x5C, 0x5F}    // up ladder rung 3 y
-var D_2DE0 = [4]uint8{0xAF, 0x87, 0x6F, 0x62}    // down ladder rung 1 y
-var D_2DE4 = [4]uint8{0x8F, 0x77, 0x69, 0x61}    // down ladder rung 2 y
-var D_2DE8 = [4]uint8{0x6F, 0x67, 0x63, 0x60}    // down ladder rung 3 y
-
-var D_2DEC, D_2DEE uint16
-
-var (
-	STA_A  uint8  // tile_forward_1
-	STA_B  uint8  // tile_forward_2
-	STA_C  bool   // <backup (Party.f_1dc == 0)>
-	STA_D  int16  // <backup Party._z>
-	STA_E  int    // current rendering depth
-	STA_F  uint8  // <backup Party._x>
-	STA_G  uint16 // <backup Party._dir>
-	STA_H  uint8  // <backup Party._y>
-	STA_I  uint8  // <backup tile_cur>
-	STA_J  uint8  // <backup tile_forward>
-	STA_K  uint8  // <backup tile_forward_1>
-	STA_L  uint8  // <backup tile_forward_2>
-	D_8CFA int
+// The view is 176 pixels square, from 8 to 183; its centre is between 95 and 96.
+const (
+	viewMiddle = 95
+	lineColor  = 3
 )
 
-func u4_abs(a int) int {
-	if a < 0 {
-		return -a
-	}
-	return a
+// The square frame of the room at each depth (and of the vanishing point past it), the
+// same for x and y: its near (left or top) and far (right or bottom) edge.
+var (
+	edgeNear = [6]int{8, 40, 72, 88, 95, 0}
+	edgeFar  = [6]int{183, 151, 119, 103, 96, 0}
+)
+
+// A side door by depth: its two x edges (left wall's, right wall's), and its top and
+// bottom, at its near and far edge.
+var (
+	leftDoorNearX  = [4]int{8, 48, 76, 90}
+	leftDoorFarX   = [4]int{24, 64, 84, 92}
+	rightDoorNearX = [4]int{183, 143, 114, 100}
+	rightDoorFarX  = [4]int{167, 127, 106, 98}
+	doorTopNear    = [4]int{52, 72, 86, 90}
+	doorTopFar     = [4]int{61, 81, 91, 95}
+	doorBottomNear = [4]int{183, 143, 115, 101}
+	doorBottomFar  = [4]int{167, 127, 107, 98}
+)
+
+// A hole (or a ladder's opening) by depth: in the ceiling its near and far y, in the floor
+// its near and far y, and its corners' x.
+var (
+	ceilingNearY  = [4]int{8, 48, 76, 90}
+	ceilingFarY   = [4]int{24, 64, 84, 93}
+	floorNearY    = [4]int{183, 143, 115, 101}
+	floorFarY     = [4]int{167, 127, 107, 98}
+	holeLeftNear  = [4]int{53, 72, 85, 92}
+	holeLeftFar   = [4]int{60, 80, 90, 93}
+	holeRightNear = [4]int{139, 120, 106, 98}
+	holeRightFar  = [4]int{131, 112, 101, 97}
+)
+
+// A ladder by depth: its two rails' x, and its three rungs' y going up and going down.
+var (
+	ladderLeftX  = [4]int{72, 84, 92, 95}
+	ladderRightX = [4]int{119, 107, 99, 96}
+	upRungY      = [3][4]int{{16, 56, 80, 93}, {48, 72, 86, 94}, {80, 88, 92, 95}}
+	downRungY    = [3][4]int{{175, 135, 111, 98}, {143, 119, 105, 97}, {111, 103, 99, 96}}
+)
+
+var trapCountdown, frameCountdown uint16
+
+// The view as rendered last, to skip rendering it again when nothing changed.
+var rendered struct {
+	z          int16
+	x, y       uint8
+	dir        uint16
+	dark       bool
+	here       uint8
+	ahead      uint8
+	twoAhead   uint8
+	threeAhead uint8
 }
 
-func isign(a int) int { return int(u4_sign(int16(a))) }
+var (
+	twoAheadTile, threeAheadTile uint8 // the rooms two and three ahead
+	depth                        int   // the depth being drawn
+	monsterFrame                 int   // the dungeon monsters' animation frame
+)
 
-func w8(a [6]uint8, i int) int { return int(a[i]) }
-func q8(a [4]uint8, i int) int { return int(a[i]) }
-
-// render force fields?
-func C_A7F2(bp04 uint8) {
-	e := STA_E
-	Gra_02((w8(Wall_y1, e)-w8(Wall_y0, e)+1)/16, (w8(Wall_x1, e)-w8(Wall_x0, e)+1)/16,
-		int(bp04&3)|0x44, w8(Wall_y0, e), w8(Wall_x0, e)>>2)
+// drawField draws the force field of kind field filling the room's frame at the depth.
+func drawField(field uint8) {
+	near, far := edgeNear[depth], edgeFar[depth]
+	tiles := (far - near + 1) / 16
+	fillTiles(tiles, tiles, tilePoisonField+int(field%4), near, near/4)
 }
 
-// drawLine
-func C_A842(bp0a, bp08, bp06, bp04 int) {
-	loc_E := bp0a
-	loc_A := bp08
-	loc_B := isign(bp06 - bp0a)
-	loc_C := isign(bp04 - bp08)
-	if u4_abs(bp0a-bp06) < u4_abs(bp08-bp04) {
-		loc_D := u4_abs(bp04-bp08) / 2
-		for {
-			Gra_dot_OR(loc_A, loc_E, 3)
-			loc_A += loc_C
-			loc_D -= u4_abs(bp06 - bp0a)
-			if loc_D <= 0 {
-				loc_E += loc_B
-				loc_D += u4_abs(bp04 - bp08)
-			}
-			if loc_A == bp04 {
-				break
-			}
-		}
-	} else {
-		loc_D := u4_abs(bp06-bp0a) / 2
-		for {
-			Gra_dot_OR(loc_A, loc_E, 3)
-			loc_E += loc_B
-			loc_D -= u4_abs(bp04 - bp08)
-			if loc_D <= 0 {
-				loc_A += loc_C
-				loc_D += u4_abs(bp06 - bp0a)
-			}
-			if loc_E == bp06 {
-				break
-			}
-		}
-	}
-	Gra_dot_OR(loc_A, loc_E, 3)
+// drawHole draws a hole's outline at the depth, between near and far y.
+func drawHole(nearY, farY [4]int) {
+	e := depth
+	leftNear, leftFar, rightNear, rightFar := holeLeftNear[e], holeLeftFar[e], holeRightNear[e], holeRightFar[e]
+	drawLine(leftNear, nearY[e], leftFar, farY[e], lineColor)
+	drawLine(leftNear+1, nearY[e], leftFar+1, farY[e], lineColor)
+	drawLine(leftFar+1, farY[e], rightFar, farY[e], lineColor)
+	drawLine(rightFar, farY[e], rightNear, nearY[e], lineColor)
+	drawLine(rightFar-1, farY[e], rightNear-1, nearY[e], lineColor)
+	drawLine(rightNear-1, nearY[e], leftNear+1, nearY[e], lineColor)
 }
 
-// pit: up (top row tables) or low (bottom)
-func pit(a, b [4]uint8) {
-	si := STA_E
-	Gra_line(q8(D_2DBC, si), q8(a, si), q8(D_2DC0, si), q8(b, si), 3)
-	Gra_line(q8(D_2DBC, si)+1, q8(a, si), q8(D_2DC0, si)+1, q8(b, si), 3)
-	Gra_line(q8(D_2DC0, si)+1, q8(b, si), q8(D_2DC8, si), q8(b, si), 3)
-	Gra_line(q8(D_2DC8, si), q8(b, si), q8(D_2DC4, si), q8(a, si), 3)
-	Gra_line(q8(D_2DC8, si)-1, q8(b, si), q8(D_2DC4, si)-1, q8(a, si), 3)
-	Gra_line(q8(D_2DC4, si)-1, q8(a, si), q8(D_2DBC, si)+1, q8(a, si), 3)
-}
+func drawCeilingHole() { drawHole(ceilingNearY, ceilingFarY) }
+func drawFloorHole()   { drawHole(floorNearY, floorFarY) }
 
-func C_A94A() { pit(D_2DAC, D_2DB0) } // up pit
-func C_AA29() { pit(D_2DB4, D_2DB8) } // low pit
-
-func C_AB08(bp04 uint8) int {
-	D_2DEC--
-	if D_2DEC+1 == 0 {
-		D_2DEC = speed_info - 1
-	}
-	switch bp04 & 0xf0 {
-	default:
-		if bp04&0xf0 < 0xc0 {
-			return 0
-		}
-		return -1
-	case 0x40:
-		return TIL_3C
-	case 0x70:
-		return TIL_4E
-	case 0x80:
-		if D_2DEC == 1 && U4_RND1(0x3f) == 0 && bp04&0xf != 0 {
-			if bp04&0x0f >= 8 {
-				C_AA29()
+// contentsSprite is the sprite to draw for a room's contents: 0 for none (traps show as a
+// hole now and then), -1 for a door, room or wall, which blocks the view. A field is drawn
+// here, and slows the cursor by its distance.
+func contentsSprite(room uint8) int {
+	countDown(&trapCountdown, speedInfo-1)
+	switch dngKind(room) {
+	case dngChest:
+		return tileChest
+	case dngOrb:
+		return tileMagicSphere
+	case dngTrap:
+		if trapCountdown == 1 && randomBits(63) == 0 && dngDetail(room) != 0 {
+			if dngDetail(room) >= 8 {
+				drawFloorHole()
 			} else {
-				C_A94A()
+				drawCeilingHole()
 			}
 		}
 		return 0
-	case 0x90:
-		return TIL_02
-	case 0xa0:
-		C_A7F2(bp04&3 | TIL_44)
-		switch STA_E {
-		case 0:
-			cursor_rate = 0
-		case 1:
-			cursor_rate = 1
-		case 2:
-			cursor_rate = 6
-		case 3:
-			cursor_rate = 10
-		}
-		return TIL_48
-	case 0xb0:
-		return TIL_4A
+	case dngFountain:
+		return tileShallowWater
+	case dngField:
+		drawField(room)
+		cursorRate = [4]uint16{0, 1, 6, 10}[depth]
+		return tileBarrier
+	case dngAltar:
+		return tileAltar
 	}
+	if room < dngDoor {
+		return 0
+	}
+	return -1
 }
 
-// isSpriteRenderable?
-func C_ABE5(bp04 uint8) bool {
-	si := bp04 & 0xf0
-	if si == 0x80 || si == 0x90 || si == 0xa0 || si >= 0xd0 {
+// hasMonster says whether a monster is in the room (not one of the kinds whose lower bits
+// mean something else).
+func hasMonster(room uint8) bool {
+	switch dngKind(room) {
+	case dngTrap, dngFountain, dngField:
 		return false
 	}
-	return bp04&0x0f != 0
+	return room < dngRoom && dngDetail(room) != 0
 }
 
-// The sprite pause of C_AC23 per STA_E: a calibrated while(--long) of k*speed_info passes
-// (each about 3 delay-loop passes of 55ms/8000), k = 1000, 1200, 2400, 3000.
+// spritePause is the pause after drawing a sprite at each depth: the original counted down
+// 1000, 1200, 2400 and 3000 passes per speed step (about 3 delay-loop passes of 55ms/8000).
 var spritePause = [4]time.Duration{20625 * time.Microsecond, 24750 * time.Microsecond, 49500 * time.Microsecond, 61875 * time.Microsecond}
 
-// render sprites?
-func C_AC23(bp04 int) {
-	cursor_rate = 0
-	switch STA_E {
+// drawSprite draws tile on the room's floor at the depth: at 3x, 2x, 1x and half size.
+func drawSprite(tile int) {
+	cursorRate = 0
+	switch depth {
 	case 0:
-		for b := 0; b < 48; b++ {
-			Gra_01(bp04, b/3, b+0x70, 0x14, 2)
+		for row := 0; row < 48; row++ {
+			drawTileRow(tile, row/3, 112+row, 20, 2)
 		}
-
 	case 1:
-		for b := 0; b < 32; b++ {
-			Gra_01(bp04, b>>1, b+0x68, 0x14, 2)
+		for row := 0; row < 32; row++ {
+			drawTileRow(tile, row/2, 104+row, 20, 2)
 		}
-
 	case 2:
-		Gra_02(1, 1, bp04, 0x60, 0x16)
-
+		fillTiles(1, 1, tile, 96, 22)
 	case 3:
-		for b := 0; b < 8; b++ {
-			Gra_01(bp04, b<<1, b+0x60, 0x16, 1)
+		for row := 0; row < 8; row++ {
+			drawTileRow(tile, row*2, 96+row, 22, 1)
 		}
 	}
-	host.Wait(spritePause[STA_E&3])
+	host.Wait(spritePause[depth%4])
 }
 
-func C_AD6A(bp06 uint8, bp04 int) bool {
-	STA_E = bp04
-	D_2DEE--
-	if D_2DEE+1 == 0 {
-		D_2DEE = speed_info - 1
-		D_8CFA = U4_RND1(3)
+// drawRoomContents draws what room holds at depth d; it reports whether the view goes on
+// past it.
+func drawRoomContents(room uint8, d int) bool {
+	depth = d
+	if countDown(&frameCountdown, speedInfo-1) {
+		monsterFrame = randomBits(3)
 	}
-	if C_ABE5(bp06) {
-		C_AC23(TIL_90 + int(bp06&0xf)<<2 - 4 + D_8CFA)
+	if hasMonster(room) {
+		drawSprite(tileRat + int(dngDetail(room)-1)*4 + monsterFrame)
 		return false
 	}
-	bp_02 := C_AB08(bp06)
-	if bp_02 > 0 {
-		if bp_02 != TIL_48 {
-			C_AC23(bp_02)
+	sprite := contentsSprite(room)
+	if sprite > 0 {
+		if sprite != tileBarrier {
+			drawSprite(sprite)
 		}
 		return false
 	}
-	if bp_02 != 0 {
-		if STA_E != 0 || bp06 >= 0xd0 {
-			return false
-		}
+	if sprite != 0 && (depth != 0 || room >= dngRoom) {
+		return false
 	}
 	return true
 }
 
-// animate 3D sprites?
-func C_ADEF() {
-	if Party.f_1dc == 0 {
-		Gra_10()
+// drawDungeonSprites draws the contents of the party's room and the three ahead, up to the
+// first that blocks the view; in the dark, nothing.
+func drawDungeonSprites() {
+	if party.flyingOrLight == 0 {
+		clearMap()
 		return
 	}
-	if !C_AD6A(tile_cur, 0) {
-		return
-	}
-	if !C_AD6A(tile_forward, 1) {
-		return
-	}
-	if !C_AD6A(STA_A, 2) {
-		return
-	}
-	C_AD6A(STA_B, 3)
+	_ = drawRoomContents(hereTile, 0) &&
+		drawRoomContents(aheadTile, 1) &&
+		drawRoomContents(twoAheadTile, 2) &&
+		drawRoomContents(threeAheadTile, 3)
 }
 
-func dngTile(y, x int) uint8 { return *D_8742.x8x8x8(int(Party._z), y, x) }
-
-// compute nearest tiles
-func C_AE41() {
-	d := int(Party._dir)
-	// back
-	x := DNG_X_m(int(Party._x), d)
-	y := DNG_Y_m(int(Party._y), d)
-	tile_back = dngTile(y, x)
-	// current tile
-	tile_cur = dngTile(int(Party._y), int(Party._x))
-	// forward
-	x = DNG_X_p(int(Party._x), d)
-	y = DNG_Y_p(int(Party._y), d)
-	tile_forward = dngTile(y, x)
-	// another 2 steps forward
-	x = DNG_X_p(x, d)
-	y = DNG_Y_p(y, d)
-	STA_A = dngTile(y, x)
-	x = DNG_X_p(x, d)
-	y = DNG_Y_p(y, d)
-	STA_B = dngTile(y, x)
-}
-
-// compute the actual x,y of the square at depth STA_E and column bp04 (-1 left, 0
-// straight, +1 right) from the party's position and orientation
-func C_AF36(getX, getY *int, bp04 int) {
-	*getX = int(Party._x)
-	*getY = int(Party._y)
-	switch Party._dir {
-	case DIR_N:
-		*getY = (*getY - STA_E) & 7
-		*getX = (*getX + bp04) & 7
-	case DIR_S:
-		*getY = (*getY + STA_E) & 7
-		*getX = (*getX - bp04) & 7
-	case DIR_E:
-		*getX = (*getX + STA_E) & 7
-		*getY = (*getY + bp04) & 7
-	case DIR_W:
-		*getX = (*getX - STA_E) & 7
-		*getY = (*getY - bp04) & 7
+// dngTile is the room (x, y) on the party's level. Above the first level (Y-up cast there,
+// the dungeon left at the next turn) the original read the bytes before the map, which the
+// turn never uses: empty here.
+func dngTile(y, x int) uint8 {
+	if party.z < 0 {
+		return 0
 	}
+	return *area.dungeonRoom(int(party.z), y, x)
 }
 
-func VERTICAL(x, y0, y1, c int)   { Gra_line(x&0xff, y0, x&0xff, y1, c) }
-func HORIZONTAL(x0, y, x1, c int) { Gra_line(x0&0xff, y, x1&0xff, y, c) }
+// lookAround notes the rooms behind the party, its own and the three ahead.
+func lookAround() {
+	d := int(party.dir)
+	behindTile = dngTile(behindY(int(party.y), d), behindX(int(party.x), d))
+	hereTile = dngTile(int(party.y), int(party.x))
+	x, y := aheadX(int(party.x), d), aheadY(int(party.y), d)
+	aheadTile = dngTile(y, x)
+	x, y = aheadX(x, d), aheadY(y, d)
+	twoAheadTile = dngTile(y, x)
+	x, y = aheadX(x, d), aheadY(y, d)
+	threeAheadTile = dngTile(y, x)
+}
 
-// up ladder
-func C_AFB5() {
-	si := STA_E
-	C_A94A()
-	if Party._dir == DIR_N || Party._dir == DIR_S {
-		VERTICAL(0x5f, q8(D_2DAC, si), 0x5f, 3)
-		VERTICAL(0x5f+1, q8(D_2DAC, si), 0x5f, 3)
+// roomAt is the position of the room at the depth ahead of the party and column (-1 left,
+// 0 ahead, +1 right).
+func roomAt(column int) (x, y int) {
+	x, y = int(party.x), int(party.y)
+	switch party.dir {
+	case dirNorth:
+		y -= depth
+		x += column
+	case dirSouth:
+		y += depth
+		x -= column
+	case dirEast:
+		x += depth
+		y += column
+	case dirWest:
+		x -= depth
+		y -= column
+	}
+	return x & (levelSize - 1), y & (levelSize - 1)
+}
+
+func vertical(x, y0, y1 int)   { drawLine(x, y0, x, y1, lineColor) }
+func horizontal(x0, y, x1 int) { drawLine(x0, y, x1, y, lineColor) }
+
+// drawLadder draws a ladder through a hole at the depth: going up from the ceiling's near
+// edge, down from the floor's; seen from its side (facing north or south) just a pole.
+func drawLadder(up bool) {
+	e := depth
+	end, rungs := floorNearY[e], downRungY
+	if up {
+		end, rungs = ceilingNearY[e], upRungY
+		drawCeilingHole()
 	} else {
-		VERTICAL(q8(Ladder_x0, si), q8(D_2DAC, si), 0x5e, 3)
-		VERTICAL(q8(Ladder_x0, si)+1, q8(D_2DAC, si), 0x5e, 3)
-		VERTICAL(q8(Ladder_x1, si), q8(D_2DAC, si), 0x5e, 3)
-		VERTICAL(q8(Ladder_x1, si)-1, q8(D_2DAC, si), 0x5e, 3)
-		HORIZONTAL(q8(Ladder_x0, si), q8(D_2DD4, si), q8(Ladder_x1, si), 3)
-		HORIZONTAL(q8(Ladder_x0, si), q8(D_2DD8, si), q8(Ladder_x1, si), 3)
-		HORIZONTAL(q8(Ladder_x0, si), q8(D_2DDC, si), q8(Ladder_x1, si), 3)
+		drawFloorHole()
+	}
+	if party.dir == dirNorth || party.dir == dirSouth {
+		vertical(viewMiddle, end, viewMiddle)
+		vertical(viewMiddle+1, end, viewMiddle)
+		return
+	}
+	from, to := end, viewMiddle-1
+	if !up {
+		from, to = viewMiddle, end
+	}
+	left, right := ladderLeftX[e], ladderRightX[e]
+	vertical(left, from, to)
+	vertical(left+1, from, to)
+	vertical(right, from, to)
+	vertical(right-1, from, to)
+	for _, rung := range rungs {
+		horizontal(left, rung[e], right)
 	}
 }
 
-// down ladder
-func C_B0E9() {
-	si := STA_E
-	C_AA29()
-	if Party._dir == DIR_N || Party._dir == DIR_S {
-		VERTICAL(0x5f, q8(D_2DB4, si), 0x5f, 3)
-		VERTICAL(0x5f+1, q8(D_2DB4, si), 0x5f, 3)
-	} else {
-		VERTICAL(q8(Ladder_x0, si), 0x5f, q8(D_2DB4, si), 3)
-		VERTICAL(q8(Ladder_x0, si)+1, 0x5f, q8(D_2DB4, si), 3)
-		VERTICAL(q8(Ladder_x1, si), 0x5f, q8(D_2DB4, si), 3)
-		VERTICAL(q8(Ladder_x1, si)-1, 0x5f, q8(D_2DB4, si), 3)
-		HORIZONTAL(q8(Ladder_x0, si), q8(D_2DE0, si), q8(Ladder_x1, si), 3)
-		HORIZONTAL(q8(Ladder_x0, si), q8(D_2DE4, si), q8(Ladder_x1, si), 3)
-		HORIZONTAL(q8(Ladder_x0, si), q8(D_2DE8, si), q8(Ladder_x1, si), 3)
-	}
+// The walls' colours: facing the party, and to its sides, differ by the way it faces.
+func frontWallColor() int { return int(party.dir%2) + 1 }
+func sideWallColor() int  { return b2i(party.dir%2 == 0) + 1 }
+
+// drawFrontWall fills the wall ahead at the depth.
+func drawFrontWall() {
+	e := depth
+	fillQuad(edgeNear[e], edgeFar[e]+1, edgeNear[e], edgeFar[e], edgeNear[e], edgeFar[e], frontWallColor(), 0)
 }
 
-func dirCol() int    { return int(Party._dir&1) + 1 }
-func dirColNot() int { return b2i(Party._dir&1 == 0) + 1 }
-
-// front wall?
-func C_B21D() {
-	e := STA_E
-	Gra_18(w8(Wall_x0, e), w8(Wall_x1, e)+1, w8(Wall_y0, e), w8(Wall_y1, e), w8(Wall_y0, e), w8(Wall_y1, e), dirCol(), 0)
+// drawLeftFace and drawRightFace fill the wall facing the party in the room to the left or
+// right one depth on (seen past an open side).
+func drawLeftFace() {
+	e := depth
+	fillQuad(edgeNear[e], edgeNear[e+1], edgeNear[e+1], edgeFar[e+1], edgeNear[e+1], edgeFar[e+1], frontWallColor(), 0)
 }
 
-// left front wall?
-func C_B25E() {
-	e := STA_E
-	Gra_18(w8(Wall_x0, e), w8(Wall_x0, e+1), w8(Wall_y0, e+1), w8(Wall_y1, e+1), w8(Wall_y0, e+1), w8(Wall_y1, e+1), dirCol(), 0)
+func drawRightFace() {
+	e := depth
+	fillQuad(edgeFar[e], edgeFar[e+1], edgeNear[e+1], edgeFar[e+1], edgeNear[e+1], edgeFar[e+1], frontWallColor(), 0)
 }
 
-// right front wall?
-func C_B29C() {
-	e := STA_E
-	Gra_18(w8(Wall_x1, e), w8(Wall_x1, e+1), w8(Wall_y0, e+1), w8(Wall_y1, e+1), w8(Wall_y0, e+1), w8(Wall_y1, e+1), dirCol(), 0)
+// drawLeftWall and drawRightWall fill the side walls at the depth, in perspective.
+func drawLeftWall() {
+	e := depth
+	fillQuad(edgeNear[e], edgeNear[e+1], edgeNear[e], edgeFar[e], edgeNear[e+1], edgeFar[e+1], sideWallColor(), 0)
 }
 
-// left lateral wall?
-func C_B2DA() {
-	e := STA_E
-	Gra_18(w8(Wall_x0, e), w8(Wall_x0, e+1), w8(Wall_y0, e), w8(Wall_y1, e), w8(Wall_y0, e+1), w8(Wall_y1, e+1), dirColNot(), 0)
+func drawRightWall() {
+	e := depth
+	fillQuad(edgeFar[e], edgeFar[e+1], edgeNear[e], edgeFar[e], edgeNear[e+1], edgeFar[e+1], sideWallColor(), 0)
 }
 
-// right lateral wall?
-func C_B31B() {
-	e := STA_E
-	Gra_18(w8(Wall_x1, e), w8(Wall_x1, e+1), w8(Wall_y0, e), w8(Wall_y1, e), w8(Wall_y0, e+1), w8(Wall_y1, e+1), dirColNot(), 0)
-}
-
-// front door?
-func C_B35C() {
-	e := STA_E
-	c0, c1 := 3, 0
+// drawFrontDoor draws a door in the wall ahead (in the party's own room drawn inverted).
+func drawFrontDoor() {
+	e := depth
+	color, erase := lineColor, 0
 	if e == 0 {
-		c0, c1 = 0, 3
+		color, erase = 0, lineColor
 	}
-	Gra_18(w8(Wall_x0, e+1), w8(Wall_x1, e+1), w8(Wall_y0, e+1), w8(Wall_y1, e), w8(Wall_y0, e+1), w8(Wall_y1, e), c0, c1)
+	fillQuad(edgeNear[e+1], edgeFar[e+1], edgeNear[e+1], edgeFar[e], edgeNear[e+1], edgeFar[e], color, erase)
 }
 
-// left door?
-func C_B3AE() {
-	e := STA_E
-	Gra_18(q8(LDoor_x0, e), q8(LDoor_x1, e), q8(Door_y0, e), q8(Door_y1, e), q8(Door_y0p, e), q8(Door_y1p, e), 3, 0)
+func drawLeftDoor() {
+	e := depth
+	fillQuad(leftDoorNearX[e], leftDoorFarX[e], doorTopNear[e], doorBottomNear[e], doorTopFar[e], doorBottomFar[e], lineColor, 0)
 }
 
-// right door?
-func C_B3E3() {
-	e := STA_E
-	Gra_18(q8(RDoor_x0, e), q8(RDoor_x1, e), q8(Door_y0, e), q8(Door_y1, e), q8(Door_y0p, e), q8(Door_y1p, e), 3, 0)
+func drawRightDoor() {
+	e := depth
+	fillQuad(rightDoorNearX[e], rightDoorFarX[e], doorTopNear[e], doorBottomNear[e], doorTopFar[e], doorBottomFar[e], lineColor, 0)
 }
 
-// right walls
-func C_B418() {
-	var x, y int
-	C_AF36(&x, &y, 1)
-	switch dngTile(y, x) >> 4 {
-	case 0xc, 0xd:
-		C_B31B()
-		C_B3E3()
-	case 0xe, 0xf:
-		C_B31B()
+// drawSide draws one side at the depth: a door in a wall, a wall, or the face of the open
+// room beside.
+func drawSide(column int, wall, door, face func()) {
+	x, y := roomAt(column)
+	switch dngKind(dngTile(y, x)) {
+	case dngDoor, dngRoom:
+		wall()
+		door()
+	case dngSecretDoor, dngWall:
+		wall()
 	default:
-		C_B29C()
+		face()
 	}
 }
 
-// left & right walls
-func C_B47A() {
-	var x, y int
-	C_AF36(&x, &y, -1)
-	switch dngTile(y, x) >> 4 {
-	case 0xc, 0xd:
-		C_B2DA()
-		C_B3AE()
-	case 0xe, 0xf:
-		C_B2DA()
-	default:
-		C_B25E()
-	}
-	C_B418()
+// drawSides draws the left side then the right at the depth.
+func drawSides() {
+	drawSide(-1, drawLeftWall, drawLeftDoor, drawLeftFace)
+	drawSide(1, drawRightWall, drawRightDoor, drawRightFace)
 }
 
-// render 3d
-func C_B4DF() {
-	x, y := int(Party._x), int(Party._y)
-	for STA_E = 0; STA_E <= 3; STA_E++ {
-		C_AF36(&x, &y, 0)
-		t := dngTile(y, x)
-		switch t & 0xf0 {
-		case 0x30:
-			C_B0E9()
-			C_AFB5()
-			C_B47A()
-		case 0x10:
-			C_AFB5()
-			C_B47A()
-		case 0x00, 0x40, 0x70, 0x80, 0x90, 0xb0:
-			C_B47A()
-		case 0x20:
-			C_B0E9()
-			C_B47A()
-		case 0x50:
-			C_A94A()
-			C_B47A()
-		case 0x60:
-			C_AA29()
-			C_B47A()
-		case 0xc0:
-			C_B21D()
-			C_B35C()
-			if STA_E != 0 {
+// drawCorridor draws the view ahead, depth by depth, up to the first door or wall.
+func drawCorridor() {
+	for depth = 0; depth <= 3; depth++ {
+		x, y := roomAt(0)
+		room := dngTile(y, x)
+		switch dngKind(room) {
+		case dngLadderUpDown:
+			drawLadder(false)
+			drawLadder(true)
+			drawSides()
+		case dngLadderUp:
+			drawLadder(true)
+			drawSides()
+		case dngCorridor, dngChest, dngOrb, dngTrap, dngFountain, dngAltar:
+			drawSides()
+		case dngLadderDown:
+			drawLadder(false)
+			drawSides()
+		case dngCeilingHole:
+			drawCeilingHole()
+			drawSides()
+		case dngFloorHole:
+			drawFloorHole()
+			drawSides()
+		case dngDoor:
+			drawFrontWall()
+			drawFrontDoor()
+			if depth != 0 {
 				return
 			}
-		case 0xd0:
-			C_B21D()
-			C_B35C()
+		case dngRoom:
+			drawFrontWall()
+			drawFrontDoor()
 			return
-		case 0xa0:
-			C_A7F2(t)
+		case dngField:
+			drawField(room)
 			return
-		case 0xe0, 0xf0:
-			C_B21D()
+		case dngSecretDoor, dngWall:
+			drawFrontWall()
 			return
 		}
 	}
-	STA_E = 4
-	C_AF36(&x, &y, 0)
-	if t := dngTile(y, x) & 0xf0; t == 0xf0 || t == 0xe0 {
-		C_B21D()
+	depth = 4
+	x, y := roomAt(0)
+	if kind := dngKind(dngTile(y, x)); kind == dngWall || kind == dngSecretDoor {
+		drawFrontWall()
 	}
 }
 
-// backup dungeon infos & render 3D
-func C_B61C() {
-	STA_D = Party._z
-	STA_F = Party._x
-	STA_H = Party._y
-	STA_G = Party._dir
-	STA_C = Party.f_1dc == 0
-	STA_I = tile_cur
-	STA_J = tile_forward
-	STA_K = STA_A
-	STA_L = STA_B
-	D_9446 = 0
-	Gra_10()
-	if Party.f_1dc != 0 {
-		C_B4DF()
+// renderView notes what it renders and renders the view (in the dark, nothing).
+func renderView() {
+	rendered.z, rendered.x, rendered.y, rendered.dir = party.z, party.x, party.y, party.dir
+	rendered.dark = party.flyingOrLight == 0
+	rendered.here, rendered.ahead = hereTile, aheadTile
+	rendered.twoAhead, rendered.threeAhead = twoAheadTile, threeAheadTile
+	forceRender = 0
+	clearMap()
+	if party.flyingOrLight != 0 {
+		drawCorridor()
 	}
 }
 
-// render 3d if necessary
-func C_B677() {
-	if Party.f_1dc != 0 {
-		cursor_rate = 13
+// renderDungeon renders the view, unless nothing changed and no sprite or field in view
+// needs drawing again.
+func renderDungeon() {
+	if party.flyingOrLight != 0 {
+		cursorRate = 13
 	} else {
-		cursor_rate = 1
+		cursorRate = 1
 	}
-	C_AE41()
-	if D_9446 == 0 && STA_D == Party._z && STA_F == Party._x && STA_H == Party._y &&
-		STA_G == Party._dir && STA_I == tile_cur && STA_C == (Party.f_1dc == 0) {
-		bp_02 := tile_cur & 0xf0
-		if bp_02 == 0xa0 || bp_02 >= 0xd0 {
+	lookAround()
+	same := forceRender == 0 && rendered.z == party.z && rendered.x == party.x && rendered.y == party.y &&
+		rendered.dir == party.dir && rendered.here == hereTile && rendered.dark == (party.flyingOrLight == 0)
+	if same {
+		if k := dngKind(hereTile); k == dngField || hereTile >= dngRoom {
 			return
 		}
-		if tile_forward == STA_J {
-			if bp_02 = tile_forward & 0xf0; bp_02 == 0xa0 || bp_02 >= 0xc0 {
+		if aheadTile == rendered.ahead {
+			if k := dngKind(aheadTile); k == dngField || aheadTile >= dngDoor {
 				return
 			}
-			if STA_A == STA_K {
-				if bp_02 = STA_A & 0xf0; bp_02 == 0xa0 || bp_02 >= 0xc0 {
-					return
-				}
-				return // "if(STA_L == STA_L/*bug?*/) return;"
+			if twoAheadTile == rendered.twoAhead {
+				return // (the original compared the third room with itself)
 			}
 		}
 	}
-	C_B61C()
+	renderView()
 }
 
 // The modern layout's 3D view reads the level, the party and the light from here.
 func init() { host.DungeonView = dungeonView }
 
 func dungeonView() *host.Dungeon {
-	if CurMode != MOD_DUNGEON {
+	if gameMode != modeDungeon {
 		return nil
 	}
-	d := &host.Dungeon{X: int(Party._x), Y: int(Party._y), Dir: int(Party._dir),
-		Lit: Party.f_1dc != 0, Frame: D_8CFA, Tiles: &drv.Tiles}
-	copy(d.Map[:], D_8742._map[int(Party._z&7)*64:])
+	d := &host.Dungeon{X: int(party.x), Y: int(party.y), Dir: int(party.dir),
+		Lit: party.flyingOrLight != 0, Frame: monsterFrame, Tiles: &screen.Tiles}
+	level := int(party.z) & (dungeonLevels - 1)
+	copy(d.Map[:], area.tiles[level*levelSize*levelSize:])
 	return d
 }

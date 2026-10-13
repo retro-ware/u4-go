@@ -1,8 +1,8 @@
 package title
 
-// Port of INFLATE.ASM: the LZW decoder (12-bit codes, hashed dictionary of 0F00h entries,
-// reset after 0CCDh additions) behind Gra_inflate (*.EGA pictures) and C_217E (SHAPES.EGZ).
-// Each decoded byte goes to a callback.
+// Port of INFLATE.ASM: the LZW decoder (12-bit codes, a hashed dictionary of 3840 entries,
+// reset after 3277 additions) behind loadPicture (*.EGA pictures) and loadPacked
+// (SHAPES.EGZ). Each decoded byte goes to a callback.
 
 import (
 	"errors"
@@ -11,154 +11,152 @@ import (
 	"github.com/memmaker/u4-go/internal/gamefs"
 )
 
-var (
-	D_3B20 uint16        // deflated bytes left
-	D_3B22 []byte        // deflated file buffer (read position)
-	D_3B24 uint8         // 12 bits flag
-	D_3B25 uint8         // temporary stores 4 bits
-	D_3B26 [0xf00]uint16 // prefix code | 2000h (in use), for codes 100h..FFFh
-	D_5926 [0xf00]uint8  // last byte, for codes 100h..FFFh
-	D_6826 [0x1000]uint8 // output stack (0x100 bytes in the original; a longer chain ran into the rest of _BSS)
+// The dictionary: codes 0..255 are bytes; codes 256..4095 are a string's prefix code plus
+// one more byte. Codes are 12 bits: two codes in three bytes.
+const (
+	firstCode  = 256
+	codeCount  = 4096
+	codeMask   = codeCount - 1
+	inUse      = 8192 // marks a defined code's prefix
+	resetAfter = 3276 // the dictionary starts over once it has more new codes than this
+	probeStep  = 509  // the next slot to try after a collision
+	endOfData  = 65535
+	hashBias   = 2048
 )
 
-func tab(code uint16) uint16 { return D_3B26[code-0x100] }
+// lzw decodes one file.
+type lzw struct {
+	input    []byte                        // what is left to read
+	left     uint16                        // bytes left
+	oddCode  bool                          // the next code starts halfway into a byte
+	nibble   uint8                         // that byte
+	prefix   [codeCount - firstCode]uint16 // a code's prefix | inUse, 0 for a free slot
+	lastByte [codeCount - firstCode]uint8
+	stack    [codeCount]uint8 // a string's bytes, last first
+}
 
-// C_21E5 finds the dictionary slot for (prefix bp04, byte bp06): the slot holding it, or the
-// first free one along the probe sequence.
-func C_21E5(bp04, bp06 uint16) uint16 {
-	match := func(ax uint16) (stop bool) {
-		cx := tab(ax)
-		if cx == 0 {
-			return true
-		}
-		return cx&^0x2000 == bp04 && D_5926[ax-0x100] == uint8(bp06)
+// slot finds the dictionary slot for (prefix, b): the one holding it, or the first free one
+// along the probe sequence.
+func (d *lzw) slot(prefix, b uint16) uint16 { /*C_21E5*/
+	match := func(code uint16) bool {
+		p := d.prefix[code-firstCode]
+		return p == 0 || p&^inUse == prefix && d.lastByte[code-firstCode] == uint8(b)
 	}
-	ax := (bp06<<4 ^ bp04) & 0x0fff
-	if ax>>8 != 0 && match(ax) {
-		return ax
+	// b's high byte takes part in the first hash, though only its low byte is stored (the
+	// decoder's quirk: see decode)
+	code := (b<<4 ^ prefix) & codeMask
+	if code >= firstCode && match(code) {
+		return code
 	}
-	// C_221C: AX = ((byte(bp06)*2 + bp04) | 800h)^2, bits 10..21 taken through two rcl pairs.
-	// MUL leaves the carry set (DX is never 0 for a square >= 800h^2): it enters the first rcl.
-	v := (uint16(uint8(bp06))<<1 + bp04) | 0x800
-	p := uint32(v) * uint32(v)
-	lo, hi := uint16(p), uint16(p>>16)
-	cf := uint16(1)
-	rcl := func(x *uint16) {
-		n := *x >> 15
-		*x = *x<<1 | cf
-		cf = n
+	// then bits 6..17 of the square of (2b + prefix) | hashBias
+	v := uint32((uint16(uint8(b))<<1 + prefix) | hashBias)
+	code = uint16(v*v>>6) & codeMask
+	if code >= firstCode && match(code) {
+		return code
 	}
-	rcl(&lo)
-	rcl(&hi)
-	rcl(&lo)
-	rcl(&hi)
-	ax = (hi&0xf)<<8 | lo>>8
-	if ax>>8 != 0 && match(ax) {
-		return ax
-	}
-	for { // C_2261
-		ax = (ax + 0x1fd) & 0x0fff
-		if ax>>8 == 0 {
-			continue
-		}
-		if match(ax) {
-			return ax
+	for {
+		code = (code + probeStep) & codeMask
+		if code >= firstCode && match(code) {
+			return code
 		}
 	}
 }
 
-// C_2290 reads the next 12-bit code, FFFFh at the end of the buffer.
-func C_2290() uint16 {
-	var ax uint16
-	D_3B20--
-	if D_3B20 == 0xffff {
-		ax = 0xffff
+// readCode reads the next 12-bit code, endOfData at the end of the input.
+func (d *lzw) readCode() uint16 { /*C_2290*/
+	var code uint16
+	d.left--
+	if d.left == endOfData {
+		code = endOfData
 	} else {
-		al := D_3B22[0]
-		D_3B22 = D_3B22[1:]
-		if D_3B24 == 0 {
-			D_3B20--
-			if D_3B20 == 0xffff {
-				ax = 0xffff
+		b := d.input[0]
+		d.input = d.input[1:]
+		if !d.oddCode {
+			d.left--
+			if d.left == endOfData {
+				code = endOfData
 			} else {
-				dl := D_3B22[0]
-				D_3B22 = D_3B22[1:]
-				D_3B25 = dl
-				ax = uint16(al)<<4 | uint16(dl>>4)
+				next := d.input[0]
+				d.input = d.input[1:]
+				d.nibble = next
+				code = uint16(b)<<4 | uint16(next>>4)
 			}
 		} else {
-			ax = uint16(D_3B25&0xf)<<8 | uint16(al)
+			code = uint16(d.nibble%16)<<8 | uint16(b)
 		}
 	}
-	D_3B24 ^= 1
-	return ax
+	d.oddCode = !d.oddCode
+	return code
 }
 
-// C_22D5 decodes D_3B22 into cb.
-func C_22D5(cb func(uint8)) {
-	var code, old, fin, count uint16 // [bp-2], [bp-6], [bp-8], [bp-4]
-	D_3B24 = 0
-	clear(D_3B26[:])
-	old = C_2290()
-	fin = old
-	cb(uint8(fin))
+// decode decodes the input into emit.
+func (d *lzw) decode(emit func(uint8)) { /*C_22D5*/
+	d.oddCode = false
+	clear(d.prefix[:])
+	old := d.readCode()
+	first := old // the last string's first byte (see below)
+	emit(uint8(first))
+	count := 0
 	for {
-		code = C_2290()
-		if code == 0xffff {
+		code := d.readCode()
+		if code == endOfData {
 			return
 		}
-		if code>>8 != 0 {
-			si := 0
-			ax := code
-			if tab(code) == 0 { // the code being defined: old's string + its first byte
-				D_6826[si] = uint8(fin)
-				si++
-				ax = old
+		if code >= firstCode {
+			n := 0
+			c := code
+			if d.prefix[code-firstCode] == 0 { // the code being defined: old's string + its first byte
+				d.stack[n] = uint8(first)
+				n++
+				c = old
 			}
-			for ax>>8 != 0 { // C_232F
-				D_6826[si] = D_5926[ax-0x100]
-				si++
-				ax = tab(ax) &^ 0x2000
+			for c >= firstCode {
+				d.stack[n] = d.lastByte[c-firstCode]
+				n++
+				c = d.prefix[c-firstCode] &^ inUse
 			}
-			fin = ax
-			cb(uint8(ax))
-			for si != 0 {
-				si--
-				cb(D_6826[si])
+			first = c
+			emit(uint8(c))
+			for n != 0 {
+				n--
+				emit(d.stack[n])
 			}
 		} else {
-			cb(uint8(code))
-			fin = fin&0xff00 | code&0xff // MOV [BP-08],AL: the high byte stays
+			emit(uint8(code))
+			// quirk: only the low byte is replaced, a high byte left from a code stays
+			first = first&^255 | code
 		}
-		// C_2362
-		bx := C_21E5(old, fin)
-		D_5926[bx-0x100] = uint8(fin)
-		D_3B26[bx-0x100] = old | 0x2000
+		s := d.slot(old, first)
+		d.lastByte[s-firstCode] = uint8(first)
+		d.prefix[s-firstCode] = old | inUse
 		count++
-		if count > 0xccc {
+		if count > resetAfter {
 			count = 0
-			clear(D_3B26[:])
-			code = C_2290()
-			fin = code
-			if code == 0xffff {
+			clear(d.prefix[:])
+			code = d.readCode()
+			first = code
+			if code == endOfData {
 				return
 			}
-			cb(uint8(code))
+			emit(uint8(code))
 		}
-		old = code // C_23B3
+		old = code
 	}
 }
 
-// C_23C3 loads a file and decodes it into cb: 0, or -1 when the file can't be opened.
-func C_23C3(name string, cb func(uint8)) int {
+func decodeBytes(b []byte, emit func(uint8)) {
+	d := &lzw{input: b, left: uint16(len(b))}
+	d.decode(emit)
+}
+
+// decodeFile loads a file and decodes it into emit; false when the file can't be read.
+func decodeFile(name string, emit func(uint8)) bool { /*C_23C3*/
 	b, ok := gamefs.Read(name, SaveDir, GameDir)
 	if !ok {
-		return -1
+		return false
 	}
-	D_3B20 = uint16(len(b))
-	D_3B22 = b
-	C_22D5(cb)
-	return 0
+	decodeBytes(b, emit)
+	return true
 }
 
 // Picture decodes a 320x200 .EGA picture (LZW, two pixels a byte) to colour indexes, outside
@@ -168,14 +166,13 @@ func Picture(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	D_3B20, D_3B22 = uint16(len(b)), b
-	pix := make([]byte, 0, 320*200)
-	C_22D5(func(c uint8) {
-		if len(pix) < 320*200 {
-			pix = append(pix, c>>4, c&15)
+	pix := make([]byte, 0, picSize)
+	decodeBytes(b, func(c uint8) {
+		if len(pix) < picSize {
+			pix = append(pix, c>>4, c%16)
 		}
 	})
-	if len(pix) < 320*200 {
+	if len(pix) < picSize {
 		return nil, errors.New(path + ": short picture")
 	}
 	return pix, nil

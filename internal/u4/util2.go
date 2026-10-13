@@ -1,89 +1,90 @@
 package u4
 
-// Port of UTIL2.ASM (keyboard, delays with the blinking cursor, the random generators) and
-// LOW.ASM (start-up; the speed calibration is host.SpeedInfo).
+// The keyboard, waits with the blinking cursor, and the random numbers.
 
 import (
 	"github.com/memmaker/u4-go/internal/host"
 )
 
-// CallbackTicks is the host ticks one t_callback (one redraw of the view, the unit the
+// CallbackTicks is the host ticks one redraw (one redraw of the view, the unit the
 // game's animations count in) takes: 35 redraws a second, what a 386 (host.SpeedInfo 12)
-// managed; the moon cycle shows the rate grows as speed_info/2+1 from 5.3 on a 4.77 MHz PC.
+// managed; the moon cycle shows the rate grows as speedInfo/2+1 from 5.3 on a 4.77 MHz PC.
 const CallbackTicks = 2
 
+// untilKey is a wait in seconds that no clock reaches, so only a key ends it.
+const untilKey = 32897
+
+// The cursor is four characters of the font shown in turn, from cursorGlyph on.
+const (
+	cursorGlyph  = 28
+	cursorPhases = 4
+)
+
 var (
-	cursor_rate uint16 /*D_0672*/
-	D_0674      uint16
-	D_0676      uint16   = 0xffff // display cursor flag
-	seed_128    [16]byte          // random seeds (D_8732)
-	D_8C42      uint8             // cursor state {0, 1, 2, 3}
-	D_8C43      uint16            // cursor update counter
+	cursorRate      uint16   // redraws between cursor steps, less one (set by the view)
+	cursorRateSeen  uint16   // the rate the countdown was started with
+	cursorPhase     uint8    // which of the cursor's characters shows
+	cursorCountdown uint16   // passes until the cursor's next step
+	randomSeed      [16]byte // the random generator's state
 )
 
 // dosSeconds is DOS's clock (int 21h/2Ch) seconds, from the host clock.
 func dosSeconds() int { return int(host.Clock/256) % 60 }
 
-// u_delay waits bp04 seconds; with bp06 set a key ends the wait and the cursor blinks.
-func u_delay(bp04, bp06 int) { /*C_16CD*/
-	D_8C43 = 1
-	D_0674 = cursor_rate
-	si := dosSeconds() + bp04&0xffff
-	check := func() bool { // C_1701: true when a key ended the wait
-		return bp06 != 0 && u_kbhit() != 0
-	}
-	if si >= 60 {
-		si -= 60
-		if bp06 != 0 && u_kbhit() != 0 {
-			return // C_176C: no cursor to delete
+// waitSeconds lets seconds pass (the clock's seconds changing that often), running the
+// view. With keyEnds set a key ends the wait early, and the cursor blinks meanwhile.
+func waitSeconds(seconds int, keyEnds bool) {
+	cursorCountdown = 1
+	cursorRateSeen = cursorRate
+	end := dosSeconds() + seconds
+	if end >= 60 {
+		end -= 60
+		if keyEnds && keyWaiting() {
+			return // before the cursor was drawn: nothing to erase
 		}
 	}
-	for {
-		if check() {
-			break
+	for !(keyEnds && keyWaiting()) {
+		redraw()
+		if keyEnds {
+			stepCursor()
 		}
-		t_callback()
-		// cursor
-		if uint16(bp06)&D_0676 != 0 {
-			reload := false
-			if D_0674 != cursor_rate {
-				reload = true
-			} else {
-				D_8C43--
-				if D_8C43 == 0 {
-					D_8C42 = (D_8C42 - 1) & 3
-					Gra_putchar(D_8C42 + 0x1c)
-					reload = true
-				}
-			}
-			if reload {
-				D_8C43 = (1 + cursor_rate) * speed_info
-				D_0674 = cursor_rate
-			}
-		}
-		if dosSeconds() == si {
+		if dosSeconds() == end {
 			break
 		}
 	}
-	if uint16(bp06)&D_0676 != 0 {
-		// delete cursor
-		Gra_putchar(' ')
+	if keyEnds {
+		putGlyph(' ') // erase the cursor
 	}
 }
 
-// u_rand_a (C_1771): a 128-bit additive generator: an add-with-carry chain over the seed,
-// then a 128-bit increment.
-func u_rand_a() uint8 {
-	s := &seed_128
-	al := s[15]
-	cf := uint16(0)
-	for i := 14; i >= 1; i-- {
-		v := uint16(al) + uint16(s[i]) + cf
-		al = byte(v)
-		cf = v >> 8
-		s[i] = al
+// stepCursor counts down to the cursor's next step and draws it; a new rate restarts the
+// count.
+func stepCursor() {
+	if cursorRateSeen == cursorRate {
+		cursorCountdown--
+		if cursorCountdown != 0 {
+			return
+		}
+		cursorPhase = (cursorPhase - 1) % cursorPhases
+		putGlyph(cursorPhase + cursorGlyph)
 	}
-	s[0] = byte(uint16(s[0]) + uint16(al) + cf)
+	cursorCountdown = (1 + cursorRate) * speedInfo
+	cursorRateSeen = cursorRate
+}
+
+// randomByte is the game's random generator: a 128-bit additive generator, an add-with-carry
+// chain over the seed, then a 128-bit increment.
+func randomByte() uint8 {
+	s := &randomSeed
+	sum := s[15]
+	carry := uint16(0)
+	for i := 14; i >= 1; i-- {
+		v := uint16(sum) + uint16(s[i]) + carry
+		sum = byte(v)
+		carry = v >> 8
+		s[i] = sum
+	}
+	s[0] = byte(uint16(s[0]) + uint16(sum) + carry)
 	for i := 15; i >= 0; i-- {
 		s[i]++
 		if s[i] != 0 {
@@ -93,10 +94,9 @@ func u_rand_a() uint8 {
 	return s[0]
 }
 
-// u_rand_b (C_17A2). Its first adc takes the caller's carry; compiled C calls it after
-// instructions that leave the carry clear, so it is an add.
-func u_rand_b() uint8 {
-	s := &seed_128
+// animRandomByte is the animations' cheaper generator, over the same seed.
+func animRandomByte() uint8 {
+	s := &randomSeed
 	a := s[3] + s[2]
 	s[2] = a
 	s[1] ^= a
@@ -107,31 +107,41 @@ func u_rand_b() uint8 {
 	return a
 }
 
-func U4_RND1(a int) int { return int(u_rand_a()) & a }
-func U4_RND3(a int) int { return int(u_rand_a()) % a }
-func U4_RND4(a int) int { return SafeModulo(int(u_rand_a()), a) }
-func U4_RND2(a int) int { return int(u_rand_b()) & a }
+// randomBits is a random byte masked with mask (mask 7: 0..7).
+func randomBits(mask int) int { return int(randomByte()) & mask }
 
-// u_kbhit counts Party.f_000 and reports a waiting key (dropping ^C), running the view's
-// animation when there is none (C_17C5).
-func u_kbhit() int {
+// randomBelow is a random number from 0 to n-1.
+func randomBelow(n int) int { return int(randomByte()) % n }
+
+// randomBelowSafe is randomBelow that gives 0 for n == 0.
+func randomBelowSafe(n int) int { return safeMod(int(randomByte()), n) }
+
+// animRandomBits is an animation's random byte masked with mask.
+func animRandomBits(mask int) int { return int(animRandomByte()) & mask }
+
+// ctrlC is the BIOS key word of Ctrl-C, which the keyboard routines drop.
+const ctrlC = 11779
+
+// keyWaiting says whether a key is waiting. Every poll draws a random number and counts on
+// the party's counter; when no key is waiting the view runs.
+func keyWaiting() bool {
 	host.KeyPolled = true
-	u_rand_a()
-	Party.f_000++
+	randomByte()
+	party.counter++
 	if len(host.KeyQueue) > 0 {
 		k := host.KeyQueue[0]
-		if k != 0x2E03 && k != 0 {
-			return 1
+		if k != ctrlC && k != 0 {
+			return true
 		}
 		host.KeyQueue = host.KeyQueue[1:]
 	}
-	t_callback()
-	return 0
+	redraw()
+	return false
 }
 
-// u_kbread waits for a key (blinking the cursor) and returns its BIOS word (C_17F4).
-func u_kbread() int {
-	u_delay(0x8081, 0x8081)
+// readKey waits for a key (blinking the cursor) and returns its BIOS word.
+func readKey() int {
+	waitSeconds(untilKey, true)
 	waiting = true
 	for len(host.KeyQueue) == 0 {
 		host.KeyPolled = true
@@ -146,34 +156,23 @@ func u_kbread() int {
 	return int(k)
 }
 
-// u_kbflush drops the waiting keys (C_1804).
-func u_kbflush() {
-	for u_kbhit() != 0 {
-		u_kbread()
+// flushKeys drops the waiting keys.
+func flushKeys() {
+	for keyWaiting() {
+		readKey()
 	}
 }
 
-// ---- LOW.ASM ----
-
-func low_init() { /*C_0012*/
+// seedRandom seeds the random generator from the time of day, and sets the speed.
+func seedRandom() {
 	t := host.Now()
-	dx := uint16(t.Second())<<8 | uint16(t.Nanosecond()/10000000)
-	cx := uint16(t.Hour())<<8 | uint16(t.Minute())
-	put := func(i int, v uint16) { seed_128[i], seed_128[i+1] = byte(v), byte(v>>8) }
-	put(0, dx)
-	put(2, cx)
-	put(8, dx)
-	put(10, cx)
-	dx = uint16(t.Month())<<8 | uint16(t.Day())
-	cx = uint16(t.Year())
-	put(4, dx)
-	put(6, cx)
-	put(12, dx)
-	put(14, cx)
-	speed_info = host.SpeedInfo
+	put := func(i int, v uint16) {
+		randomSeed[i], randomSeed[i+1] = byte(v), byte(v>>8)
+		randomSeed[i+8], randomSeed[i+9] = byte(v), byte(v>>8)
+	}
+	put(0, uint16(t.Second())<<8|uint16(t.Nanosecond()/10000000))
+	put(2, uint16(t.Hour())<<8|uint16(t.Minute()))
+	put(4, uint16(t.Month())<<8|uint16(t.Day()))
+	put(6, uint16(t.Year()))
+	speedInfo = host.SpeedInfo
 }
-
-func low_clean() {} /*C_0115*/
-
-// determine graphic adapter type: EGA
-func low_gra() int16 { return 2 } /*C_0147*/

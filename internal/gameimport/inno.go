@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"path"
 	"slices"
 	"strings"
@@ -26,6 +27,9 @@ import (
 
 	"github.com/ulikunitz/xz/lzma"
 )
+
+// dosEndOfFile (Ctrl-Z) ends the text part of an installer slice's signature.
+const dosEndOfFile = 26
 
 func iv(a, b, c, d uint32) uint32 { return a<<24 | b<<16 | c<<8 | d }
 
@@ -463,7 +467,7 @@ func decompress(src io.Reader, method byte, need uint64) (io.Reader, error) {
 		if p[0] > 40 {
 			return nil, errors.New("bad LZMA2 property")
 		}
-		d := uint64(0xffffffff)
+		d := uint64(math.MaxUint32)
 		if p[0] < 40 {
 			d = uint64(2|p[0]&1) << (p[0]/2 + 11)
 		}
@@ -490,7 +494,7 @@ func (s *sliceReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		var h [12]byte
-		if _, err := r.ReadAt(h[:], 0); err != nil || string(h[:4]) != "idsk" || h[7] != 0x1a {
+		if _, err := r.ReadAt(h[:], 0); err != nil || string(h[:4]) != "idsk" || h[7] != dosEndOfFile {
 			return 0, errors.New("bad installer slice header")
 		}
 		s.r, s.size = r, int64(binary.LittleEndian.Uint32(h[8:]))

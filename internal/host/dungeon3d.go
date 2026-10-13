@@ -41,9 +41,10 @@ const (
 	fogDist = 5.0 // depth at which the torchlight is gone
 )
 
-// the DNG coding's high nibbles
+// A DNG square: its kind in the high four bits (multiples of 16), a monster or the field's
+// type in the low four.
 const (
-	dLadderUp = 0x10 + iota*0x10
+	dLadderUp = 16 + iota*16
 	dLadderDown
 	dLadderBoth
 	dChest
@@ -58,6 +59,17 @@ const (
 	dRoom
 	dSecret
 	dWall
+)
+
+func dKind(square byte) byte { return square &^ 15 }
+
+// Tiles the dungeon view shows as billboards.
+const (
+	tileShallowWater = 2
+	tileChest        = 60
+	tileAltar        = 74
+	tileMagicSphere  = 78
+	tileRat          = 144
 )
 
 const texSrc = `//kage:unit pixels
@@ -225,7 +237,7 @@ func tile(g *game, d *Dungeon, t int) *ebiten.Image {
 		return i
 	}
 	pix := make([]byte, 16*16*4)
-	for p, c := range d.Tiles[t&0xff] {
+	for p, c := range d.Tiles[byte(t)] {
 		if c != 0 {
 			copy(pix[p*4:p*4+4], g.lut[c][:])
 		}
@@ -278,7 +290,7 @@ func (g *game) drawDungeon(dst *ebiten.Image, d *Dungeon) {
 	for cell := range visible(c, w, focal, at) {
 		cx, cy := cell[0], cell[1]
 		t := at(cx, cy)
-		kind := t & 0xf0
+		kind := dKind(t)
 		x0, z0, x1, z1 := float64(cx), float64(cy), float64(cx+1), float64(cy+1)
 		fl, ce := d3.floor, d3.ceil
 		switch kind {
@@ -293,7 +305,7 @@ func (g *game) drawDungeon(dst *ebiten.Image, d *Dungeon) {
 		q(vert{x0, -0.5, z0, 0, 0}, vert{x1, -0.5, z0, 1, 0}, vert{x1, -0.5, z1, 1, 1}, vert{x0, -0.5, z1, 0, 1}, ce, 0)
 		type side struct{ ax, az, bx, bz float64 }
 		for i, s := range []side{{x0, z0, x1, z0}, {x1, z0, x1, z1}, {x1, z1, x0, z1}, {x0, z1, x0, z0}} {
-			n := at(cx+dirs[i][0], cy+dirs[i][1]) & 0xf0
+			n := dKind(at(cx+dirs[i][0], cy+dirs[i][1]))
 			if !solid(n) {
 				continue
 			}
@@ -310,20 +322,21 @@ func (g *game) drawDungeon(dst *ebiten.Image, d *Dungeon) {
 				bill(mx, mz, 0.5, 1, d3.ladder)
 			}
 		case dChest:
-			bill(mx, mz, 0.4, 0.4, tile(g, d, 0x3c))
+			bill(mx, mz, 0.4, 0.4, tile(g, d, tileChest))
 		case dOrb:
-			bill(mx, mz, 0.4, 0.4, tile(g, d, 0x4e))
+			bill(mx, mz, 0.4, 0.4, tile(g, d, tileMagicSphere))
 		case dFountain:
-			bill(mx, mz, 0.5, 0.5, tile(g, d, 0x02))
+			bill(mx, mz, 0.5, 0.5, tile(g, d, tileShallowWater))
 		case dAltar:
-			bill(mx, mz, 0.5, 0.5, tile(g, d, 0x4a))
+			bill(mx, mz, 0.5, 0.5, tile(g, d, tileAltar))
 		case dField:
 			f := bill(mx, mz, 1, 1, d3.field[t&3])
 			f.alpha = 0.8
 		}
 		// monsters ride in the low nibble (C_ABE5), drawn as the game draws them (C_AD6A)
-		if kind != dTrap && kind != dFountain && kind != dField && kind < dRoom && t&0x0f != 0 {
-			f := bill(mx+c.fwx*eyeBack, mz+c.fwz*eyeBack, 0.7, 0.7, tile(g, d, 0x90+int(t&0xf)<<2-4+d.Frame&3))
+		if kind != dTrap && kind != dFountain && kind != dField && kind < dRoom && t%16 != 0 {
+			monster := tileRat + (int(t%16)-1)*4 + d.Frame%4 // four frames each, from the rat
+			f := bill(mx+c.fwx*eyeBack, mz+c.fwz*eyeBack, 0.7, 0.7, tile(g, d, monster))
 			f.dist -= 0.4 // in front of what shares its square
 		}
 	}
@@ -364,11 +377,11 @@ func visible(c cam, w, focal float64, at func(x, y int) byte) map[[2]int]bool {
 				cz, tz = cz+stepZ, tz+tdz
 			}
 			t := at(cx, cz)
-			if solid(t & 0xf0) {
+			if solid(dKind(t)) {
 				break
 			}
 			cells[[2]int{cx, cz}] = true
-			if t&0xf0 == dField {
+			if dKind(t) == dField {
 				break
 			}
 		}

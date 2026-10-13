@@ -297,7 +297,7 @@ func (g *game) textInv(lines []string, inv func(x, y int) bool, title string) *e
 				rgb := g.lut[v]
 				switch {
 				case inv && !InWorld && v == 0: // no play screen to take a colour from
-					rgb = [4]byte{0x40, 0x40, 0xc0, 0xff}
+					rgb = [4]byte{64, 64, 192, 255}
 				case inv && v == 0: // the selection: the letters on the colour of the border's pipe
 					rgb = g.lut[g.pix[3*ScreenW+20]]
 				}
@@ -352,7 +352,7 @@ func (g *game) drawBox(screen, img *ebiten.Image, x, y, k float64) image.Rectang
 	w, h, e := float64(b.Dx())*k, float64(b.Dy())*k, 8*k
 	r := image.Rect(int(x), int(y), int(x+w), int(y+h))
 	if !InWorld { // no play screen border to take the pieces from: a plain frame
-		screen.SubImage(r.Inset(-int(e))).(*ebiten.Image).Fill(color.Gray{0xaa})
+		screen.SubImage(r.Inset(-int(e))).(*ebiten.Image).Fill(color.Gray{170})
 		screen.SubImage(r.Inset(-int(e / 2))).(*ebiten.Image).Fill(color.Black)
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Scale(k, k)

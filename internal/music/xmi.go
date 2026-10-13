@@ -62,6 +62,25 @@ func parseXMI(b []byte) ([][]event, error) {
 	return songs, nil
 }
 
+// MIDI: a status byte has its top bit set; its high four bits are the message and its low
+// four the channel. Numbers (an XMI note's length) are 7 bits a byte, the top bit set on all
+// but the last.
+const (
+	statusBit           = 128
+	midiNoteOff         = 8
+	midiNoteOn          = 9
+	midiKeyPressure     = 10
+	midiController      = 11
+	midiProgram         = 12
+	midiChannelPressure = 13
+	midiPitchBend       = 14
+	midiMeta            = 255
+	metaEndOfTrack      = 47
+)
+
+func midiMessage(status byte) byte { return status >> 4 }
+func midiChannel(status byte) byte { return status % 16 }
+
 func parseEVNT(d []byte) ([]event, error) {
 	var out []event
 	tick, p := 0, 0
@@ -71,8 +90,8 @@ func parseEVNT(d []byte) ([]event, error) {
 		for p < len(d) {
 			c := d[p]
 			p++
-			v = v<<7 | int(c&0x7f)
-			if c < 0x80 {
+			v = v<<7 | int(c%statusBit)
+			if c < statusBit {
 				return v, true
 			}
 		}
@@ -80,14 +99,14 @@ func parseEVNT(d []byte) ([]event, error) {
 	}
 	for p < len(d) {
 		s := d[p]
-		if s < 0x80 { // delay
+		if s < statusBit { // a delay, not a status
 			tick += int(s)
 			p++
 			continue
 		}
 		p++
-		switch s >> 4 {
-		case 0x9:
+		switch midiMessage(s) {
+		case midiNoteOn:
 			if p+2 > len(d) {
 				return nil, errShort
 			}
@@ -98,30 +117,30 @@ func parseEVNT(d []byte) ([]event, error) {
 				return nil, errShort
 			}
 			out = append(out, event{tick: tick, status: s, d1: key, d2: vel},
-				event{tick: tick + dur, status: 0x80 | s&0xf, d1: key, noteOff: true})
-		case 0x8, 0xa, 0xb, 0xe:
+				event{tick: tick + dur, status: midiNoteOff<<4 | midiChannel(s), d1: key, noteOff: true})
+		case midiNoteOff, midiKeyPressure, midiController, midiPitchBend:
 			if p+2 > len(d) {
 				return nil, errShort
 			}
 			// Controllers 110-120 are AIL's own (channel locks, loops, callbacks).
-			if s>>4 != 0xb || d[p] < 110 || d[p] > 120 {
+			if midiMessage(s) != midiController || d[p] < 110 || d[p] > 120 {
 				out = append(out, event{tick: tick, status: s, d1: d[p], d2: d[p+1]})
 			}
 			p += 2
-		case 0xc, 0xd:
+		case midiProgram, midiChannelPressure:
 			if p+1 > len(d) {
 				return nil, errShort
 			}
 			out = append(out, event{tick: tick, status: s, d1: d[p]})
 			p++
-		default: // F0/F7 sysex, FF meta
-			if s == 0xff {
+		default: // system exclusive, or a meta event
+			if s == midiMeta {
 				if p >= len(d) {
 					return nil, errShort
 				}
 				typ := d[p]
 				p++
-				if typ == 0x2f { // end of track: a no-op event marks where the loop restarts
+				if typ == metaEndOfTrack { // end of track: a no-op event marks where the loop restarts
 					out = append(out, event{tick: tick})
 					p = len(d)
 					continue

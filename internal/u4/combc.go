@@ -1,437 +1,430 @@
 package u4
 
-// Port of U4_COMBC.C (signed char): combat tables, loading CON files, starting and ending a combat.
+// Setting up a battle: the monsters' tables, the battlefields (CON files), the dungeon's
+// rooms, and the battle's end.
 
-// D_23D2, D_2406 and D_242A are contiguous in the original data segment: C_7C25 deliberately
-// (bug) indexes past D_23D2 into D_2406 for non-monster livings, so keep one backing array.
-var d_combat_tab = [52 + 36 + 38]uint8{
-	// D_23D2: base for enemy HP/XP/attack
-	// 80~8f
-	0xFF, 0xFF, 0x40, 0x60, 0x80, 0x60, 0xFF, 0xFF,
-	// 90~AF
-	0x30, 0x30, 0x40, 0x50, 0x30, 0x60, 0x30, 0xC0, 0xFF, 0x30, 0xF0, 0x80, 0x50, 0x30, 0x50, 0x30,
-	0x70, 0x40, 0x80, 0x40, 0xB0, 0xC0, 0x60, 0xF0, 0x70, 0xD0, 0xE0, 0xFF,
-	// 20~2f [buggy]
-	0x70, 0x30, 0x60, 0x40, 0x60, 0x80, 0x90, 0x30,
-	// 50~5f [buggy]
-	0x80, 0x30, 0x30, 0x30, 0x20, 0x20, 0x80, 0xFF,
-	// D_2406: enemy tile "partners"
-	TIL_C8, TIL_C8, TIL_8A, TIL_88, TIL_86, TIL_84, TIL_8C, TIL_8E,
-	TIL_C4, TIL_E9, TIL_90, TIL_E4, TIL_A0, TIL_D0, TIL_A8, TIL_AC, TIL_B0, TIL_90, TIL_BC, TIL_9C,
-	TIL_A4, TIL_E0, TIL_C8, TIL_90, TIL_F0, TIL_B8, TIL_EC, TIL_BC, TIL_F0, TIL_F0, TIL_F4, TIL_B8,
-	TIL_FC, TIL_F8, TIL_FC, TIL_FC,
-	// D_242A: enemy number
+// monsterTables holds three tables that ran on into each other in the original's data, and
+// still do: monsterIndex gives a tile that is no monster (a townsperson attacked) 36 to 67,
+// past the 52 strengths into the partners and group sizes.
+var monsterTables = [52 + 36 + 38]uint8{
+	// The monsters' strengths (their hit points, experience and blows), by monsterIndex:
+	// the sea monsters,
+	255, 255, 64, 96, 128, 96, 255, 255,
+	// the land monsters,
+	48, 48, 64, 80, 48, 96, 48, 192, 255, 48, 240, 128, 80, 48, 80, 48,
+	112, 64, 128, 64, 176, 192, 96, 240, 112, 208, 224, 255,
+	// and what the townspeople (tiles 32 to 47 and 80 to 95) read.
+	112, 48, 96, 64, 96, 128, 144, 48,
+	128, 48, 48, 48, 32, 32, 128, 255,
+
+	// The partners that may join a group of each monster.
+	tileRogue, tileRogue, tileSeahorse, tileSeaSerpent, tileSquid, tileNixie, tileWhirlpool, tileTwister,
+	tileSkeleton, tileLavaLizard2, tileRat, tileLiche, tileSlime, tileEttin, tileGremlin, tileMimic, tileReaper, tileRat, tilePhantom, tileGhost,
+	tileTroll, tileEvilMage, tileRogue, tileRat, tileDaemon, tileGazer, tileZorn, tilePhantom, tileDaemon, tileDaemon, tileHydra, tileGazer,
+	tileBalron, tileDragon, tileBalron, tileBalron,
+
+	// How many of each monster come at most.
 	1, 1, 12, 4, 4, 8, 1, 1,
 	12, 12, 6, 4, 15, 6, 15, 1, 1, 15, 4, 8, 10, 12, 10, 12,
 	6, 8, 6, 12, 6, 4, 8, 4, 6, 4, 4, 1,
-	0, 0, // padding
+	0, 0,
 }
 
 var (
-	D_23D2 = d_combat_tab[0:52]
-	D_2406 = d_combat_tab[52:88]
-	D_242A = d_combat_tab[88:]
+	monsterStrength  = monsterTables[0:]
+	monsterPartner   = monsterTables[52:]
+	monsterGroupSize = monsterTables[88:]
 )
 
-// weapons damage
-var D_2450 = [16]uint8{0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x40, 0x28, 0x38, 0x40, 0x60, 0x60, 0x80, 0x50, 0xA0, 0xFF}
+// weaponDamage is the most damage each weapon adds to the wielder's strength.
+var weaponDamage = [16]uint8{8, 16, 24, 32, 40, 48, 64, 40, 56, 64, 96, 96, 128, 80, 160, 255}
 
-// armors protection
-var D_2460 = [8]uint8{0x60, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xF8}
+// armorDefense: a blow fails when a random byte is at most this.
+var armorDefense = [8]uint8{96, 128, 144, 160, 176, 192, 208, 248}
 
-// range weapons flag
-var D_2468 = [16]uint8{0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00}
+// weaponRanged says which weapons shoot (or are thrown).
+var weaponRanged = [16]bool{
+	weaponSling: true, weaponBow: true, weaponCrossbow: true, weaponOil: true,
+	weaponMagicAxe: true, weaponMagicBow: true, weaponMagicWand: true,
+}
 
-// Enemy index. Original bug kept: non-monsters index (tile&0x1f)+0x24, past D_23D2 into D_2406.
-func C_7C25(bp04 uint8) int {
-	if bp04 >= TIL_80 {
-		bp04 &= 0x7f
-		if (bp04 >> 1) < 8 {
-			return int(bp04 >> 1)
-		}
-		return int(bp04>>2) + 4
+// monsterIndex is a monster's place in the monster tables: the sea monsters (two tiles each)
+// 0 to 7, the land monsters (four tiles each) 8 to 35; anything else 36 to 67.
+func monsterIndex(tile uint8) int {
+	if tile < tilePirateWest {
+		return int(tile%32) + 36
 	}
-	// not monster
-	return int(bp04&0x1f) + 0x24
+	t := int(tile - tilePirateWest)
+	if t/2 < 8 {
+		return t / 2
+	}
+	return t/4 + 4
 }
 
-var D_2512 = [14]string{
-	"GRASS.CON", "BRIDGE.CON", "BRICK.CON", "DUNGEON.CON", "HILL.CON", "FOREST.CON", "BRUSH.CON",
-	"MARSH.CON", "SHIPSEA.CON", "SHIPSHOR.CON", "SHORE.CON", "SHIPSHIP.CON", "SHORSHIP.CON", "CAMP.CON",
-}
-
-// load CON file
-func C_7C65() {
-	var si int
-	if Party._tile <= TIL_13 || int(tile_cur)&^3 == TIL_10 {
-		if D_96F8 == TIL_80 {
-			D_9452 = TIL_C8
-			si = 11
-		} else if D_946C < TIL_03 {
-			si = 8
-		} else {
-			si = 9
+// loadBattlefield loads the battlefield for a fight outdoors or in a town: by ship, against
+// pirates, on the shore, or the ground the party stands on.
+func loadBattlefield() {
+	var file string
+	aboard := party.tile <= tileShipSouth || int(hereTile)&^3 == tileShipWest
+	switch {
+	case aboard && encounterTile == tilePirateWest:
+		foeTile = tileRogue
+		file = "SHIPSHIP.CON"
+	case aboard && foeGround < tileSwamp:
+		file = "SHIPSEA.CON"
+	case aboard:
+		file = "SHIPSHOR.CON"
+	case encounterTile == tilePirateWest:
+		foeTile = tileRogue
+		file = "SHORSHIP.CON"
+	case foeGround < tileSwamp:
+		file = "SHORE.CON"
+	default:
+		switch hereTile {
+		case tileSwamp:
+			file = "MARSH.CON"
+		case tileScrub:
+			file = "BRUSH.CON"
+		case tileForest:
+			file = "FOREST.CON"
+		case tileHills:
+			file = "HILL.CON"
+		case tileDungeon:
+			file = "DUNGEON.CON"
+		case tileBrickFloor:
+			file = "BRICK.CON"
+		case tileBridge, tileBridgeNorth, tileBridgeSouth, tileWoodFloor:
+			file = "BRIDGE.CON"
+		default:
+			file = "GRASS.CON"
 		}
+	}
+	LoadRec(file, &battlefield)
+}
+
+// startDungeonFight fights the monster in the party's dungeon room, on a battlefield like
+// the room.
+func startDungeonFight() {
+	file := "DNG0.CON"
+	switch dngKind(hereTile) {
+	case dngLadderUp:
+		file = "DNG1.CON"
+	case dngLadderDown:
+		file = "DNG2.CON"
+	case dngLadderUpDown:
+		file = "DNG3.CON"
+	case dngChest:
+		file = "DNG4.CON"
+	case dngDoor:
+		file = "DNG5.CON"
+	case dngSecretDoor:
+		file = "DNG6.CON"
+	}
+	LoadRec(file, &battlefield)
+	runCombat()
+	forceRender = 1
+}
+
+// startInnFight fights the thief in the inn at night.
+func startInnFight() {
+	LoadRec("INN.CON", &battlefield)
+	runCombat()
+}
+
+// beginCombat clears the battlefield's fighters and fights encounterTile.
+func beginCombat() {
+	printText("\n\n**** Combat ****\n\n")
+	foeTile = encounterTile
+	for i := len(fighters.tile) - 1; i >= 0; i-- {
+		fighters.tile[i] = 0
+		fighters.x[i] = 0
+		fighters.y[i] = 0
+		fighters.sleeping[i] = 0
+	}
+	for i := 7; i >= 0; i-- {
+		fighters.memberTile[i] = 0
+	}
+	loadBattlefield()
+	runCombat()
+}
+
+// startCombat fights person i, noting the ground they stand on.
+func startCombat(i int) {
+	encounterTile = area.people.tile[i]
+	foeX, foeY = area.people.x[i], area.people.y[i]
+	if party.loc == 0 {
+		foeGround = *area.townTile(int(foeY)-int(windowQuarter.y)*quarterTiles, int(foeX)-int(windowQuarter.x)*quarterTiles)
 	} else {
-		if D_96F8 == TIL_80 {
-			D_9452 = TIL_C8
-			si = 12
-		} else if D_946C < TIL_03 {
-			si = 10
-		} else {
-			switch tile_cur {
-			case TIL_03:
-				si = 7
-			case TIL_05:
-				si = 6
-			case TIL_06:
-				si = 5
-			case TIL_07:
-				si = 4
-			case TIL_09:
-				si = 3
-			case TIL_3E:
-				si = 2
-			case TIL_17, TIL_19, TIL_1A, TIL_3F:
-				si = 1
-			default:
-				si = 0
-			}
+		foeGround = *area.townTile(int(foeY), int(foeX))
+	}
+	area.people.behaviour[i] = 0
+	area.people.baseTile[i] = 0
+	area.people.tile[i] = 0
+	beginCombat()
+}
+
+// setUpFighters sets out the monsters (how many: from the group size, the guards by the
+// party's size, never more than twice the party) with partners now and then, and the party.
+func setUpFighters() {
+	for i := len(fighters.tile) - 1; i >= 0; i-- {
+		fighters.tile[i] = 0
+	}
+	var last int // the monsters' count, less one
+	groupOf := func(tile int) int { return int(monsterGroupSize[monsterIndex(uint8(tile))]) }
+	someOf := func(n int) int { return (randomBelowSafe(n) + n) / 2 }
+	switch {
+	case modeBeforeCombat == modeTown && gameMode != modeCombatCamp:
+		if encounterTile == tileGuard {
+			last = int(party.size)*2 - 1
+		}
+	case foeTile < tilePirateWest:
+		last = someOf(groupOf(int(foeTile)))
+	default:
+		// Pirates and monsters: up to eight; none drawn asks the group size of tile 0,
+		// which is 0.
+		if last = randomBits(7); last == 0 {
+			last = someOf(groupOf(0))
 		}
 	}
-	LoadRec(D_2512[si], &Combat)
-}
-
-var D_256E = [16]int{0, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 5, 0, 6, 0}
-
-var D_258E = [7]string{"DNG0.CON", "DNG1.CON", "DNG2.CON", "DNG3.CON", "DNG4.CON", "DNG5.CON", "DNG6.CON"}
-
-// load dungeon CON file
-func C_7D50() {
-	LoadRec(D_258E[D_256E[tile_cur>>4]], &Combat)
-	C_7FD7()
-	D_9446 = 1 // force 3d render
-}
-
-// load inn CON file
-func C_7D92() {
-	LoadRec("INN.CON", &Combat)
-	C_7FD7()
-}
-
-// start a combat bis ?
-func C_7DBC() {
-	u4_puts("\n\n**** Combat ****\n\n")
-	D_9452 = D_96F8
-	for si := 15; si >= 0; si-- {
-		Fighters._tile[si] = 0
-		Fighters._x[si] = 0
-		Fighters._y[si] = 0
-		Fighters._sleeping[si] = 0
+	for last/2 >= int(party.size) {
+		last = randomBelowSafe(int(party.size) * 2)
 	}
-	for si := 7; si >= 0; si-- {
-		Fighters._chtile[si] = 0
-	}
-	C_7C65()
-	C_7FD7()
-}
-
-// start a combat ?
-func C_7DFE(si int) {
-	D_96F8 = D_8742._npc._tile[si]
-	D_9772 = D_8742._npc._x[si]
-	D_9140 = D_8742._npc._y[si]
-	if Party._loc == 0x00 {
-		D_946C = *D_8742.x32x32(int(D_9140)-(int(D_95A5.y)<<4), int(D_9772)-(int(D_95A5.x)<<4))
-	} else {
-		D_946C = *D_8742.x32x32(int(D_9140), int(D_9772))
-	}
-	D_8742._npc._var[si] = 0
-	D_8742._npc._gtile[si] = 0
-	D_8742._npc._tile[si] = 0
-	C_7DBC()
-}
-
-// init fighters info?
-func C_7E7E() {
-	var loc_A, loc_D, loc_B, loc_C int
-
-	for loc_D = 15; loc_D >= 0; loc_D-- {
-		Fighters._tile[loc_D] = 0
-	}
-	partners := func() int { return int(D_242A[C_7C25(uint8(loc_A))]) }
-	if D_95CC == MOD_BUILDING && CurMode != MOD_COM_CAMP {
-		if D_96F8 == TIL_50 {
-			loc_A = int(Party.f_1d8)*2 - 1
-		} else {
-			loc_A = 0
-		}
-	} else {
-		loc_A = int(D_9452)
-		if D_9452 < TIL_80 {
-			loc_A = (U4_RND4(partners()) + partners()) / 2
-		} else if loc_A = U4_RND1(7); loc_A == 0 {
-			loc_A = (U4_RND4(partners()) + partners()) / 2
-		}
-	}
-	for {
-		loc_D = loc_A
-		if uint16(loc_A>>1) < Party.f_1d8 { // int vs unsigned compare
-			break
-		}
-		loc_A = U4_RND4(int(Party.f_1d8) * 2)
-	}
-	for loc_B = loc_D; loc_B >= 0; loc_B-- {
+	for n := last; n >= 0; n-- {
+		var slot int
 		for {
-			loc_D = U4_RND1(15)
-			if Fighters._tile[loc_D] == 0 {
+			slot = randomBits(15)
+			if fighters.tile[slot] == 0 {
 				break
 			}
 		}
-		loc_E := D_9452
-		// add some "partners"
-		if D_9452 > TIL_80 && loc_B != 0 {
-			if U4_RND1(31) == 0 {
-				loc_E = D_2406[C_7C25(D_2406[C_7C25(D_9452)])]
-			} else if U4_RND1(7) == 0 {
-				loc_E = D_2406[C_7C25(D_9452)]
+		kind := foeTile
+		if foeTile > tilePirateWest && n != 0 {
+			if randomBits(31) == 0 {
+				kind = monsterPartner[monsterIndex(monsterPartner[monsterIndex(foeTile)])]
+			} else if randomBits(7) == 0 {
+				kind = monsterPartner[monsterIndex(foeTile)]
 			}
 		}
-		Fighters._tile[loc_D] = loc_E
-		Fighters._gtile[loc_D] = loc_E
-		loc_C = int(D_23D2[C_7C25(loc_E)])
-		Fighters._HP[loc_D] = uint8((loc_C >> 1) | U4_RND4(loc_C))
+		fighters.tile[slot] = kind
+		fighters.baseTile[slot] = kind
+		strength := int(monsterStrength[monsterIndex(kind)])
+		fighters.hp[slot] = uint8(strength/2 | randomBelowSafe(strength))
 	}
-	for loc_D = int(Party.f_1d8) - 1; loc_D >= 0; loc_D-- {
-		if !isCharaAlive(loc_D) {
-			Fighters._chtile[loc_D] = 0
+	setUpMembers()
+}
+
+// setUpMembers puts the living party members on the battlefield.
+func setUpMembers() {
+	for i := int(party.size) - 1; i >= 0; i-- {
+		if isAlive(i) {
+			fighters.memberTile[i] = uint8(memberShape(i))
+			memberFrame[i] = fighters.memberTile[i]
 		} else {
-			Fighters._chtile[loc_D] = uint8(C_0ACF(loc_D))
-			D_944A[loc_D] = Fighters._chtile[loc_D]
+			fighters.memberTile[i] = 0
 		}
 	}
 }
 
-func C_7FD7() {
-	if CurMode != MOD_COM_CAMP {
-		D_95CC = int16(CurMode)
-		CurMode = MOD_COMBAT
+// runCombat sets the fighters out and fights, then returns to the mode before.
+func runCombat() {
+	if gameMode != modeCombatCamp {
+		modeBeforeCombat = int16(gameMode)
+		gameMode = modeCombat
 	}
-	C_7E7E()
-	COM_main()
-	CurMode = uint16(D_95CC)
+	setUpFighters()
+	fight()
+	gameMode = uint16(modeBeforeCombat)
 }
 
-// enter dungeon room?
-func C_7FFD() {
-	// dungeon room info (0x100 bytes):
-	//  000 secret tiles info[16]; 010 enemy tiles[16]; 020 x[16]; 030 y[16];
-	//  charas positions x,y[8] each: 040/048 dir 0, 050/058 dir 1, 060/068 dir 2, 070/078 dir 3;
-	//  080 room map[0x80]
-	var loc_A [0x100]uint8
-	var loc_B, loc_C int
+// A dungeon's file holds after its levels' maps (dungeonMapSize bytes) its rooms, each
+// roomSize bytes: the triggers (see springTriggers), the monsters' tiles and positions, the
+// party members' positions for each side the party may come in by, and the room's map.
+const (
+	roomSize         = 256
+	roomMonsterTiles = 16
+	roomMonsterX     = 32
+	roomMonsterY     = 48
+	roomMembers      = 64 // x then y of the 8 members for each side, 16 bytes a side
+	roomMap          = 128
+	abyssRoomsPerTwo = 16 // the Abyss has 16 rooms for every two levels
+	altarRoomNumber  = 15 // a room number below the Abyss: an altar room
+	altarLoveX       = 3  // the altar room's entrance column for love
+	altarTruthMaxX   = 2  // and for truth (courage's is east of love's)
+)
 
-	ofs := uint16(8 * 8 * 8) // past the level maps
-	if Party._loc == 0x18 {
-		ofs += uint16(int(Party._z>>1)*0x1000) + uint16(tile_cur&0xf)*0x100
-	} else {
-		ofs += uint16(tile_cur&0xf) * 0x100
+// fightRoom fights the battle of the dungeon room the party entered.
+func fightRoom() {
+	number := int(dngDetail(hereTile))
+	offset := dungeonMapSize + number*roomSize
+	if party.loc == locAbyss {
+		offset += int(party.z/2) * abyssRoomsPerTwo * roomSize
 	}
-	copy(loc_A[:], at(File_DNG, int(ofs)))
-	D_95CC = MOD_DUNGEON
-	CurMode = MOD_COM_ROOM
-	copy(D_95B2[:], loc_A[:16])
-	D_943E = -1
-	if tile_cur&0xf == 0xf && Party._loc < 0x18 {
-		u4_puts("\nThe Altar Room of ")
-		if Party._x == 3 {
-			u4_puts("Love\n")
-			D_943E = 1
-		} else if Party._x <= 2 {
-			u4_puts("Truth\n")
-			D_943E = 0
-		} else {
-			u4_puts("Courage\n")
-			D_943E = 2
+	var room [roomSize]uint8
+	copy(room[:], at(dungeonFile, offset))
+	modeBeforeCombat = modeDungeon
+	gameMode = modeCombatRoom
+	copy(roomTriggers[:], room[:16])
+	altarRoom = noAltar
+	if number == altarRoomNumber && party.loc < locAbyss {
+		printText("\nThe Altar Room of ")
+		switch {
+		case party.x == altarLoveX:
+			printText("Love\n")
+			altarRoom = altarLove
+		case party.x <= altarTruthMaxX:
+			printText("Truth\n")
+			altarRoom = altarTruth
+		default:
+			printText("Courage\n")
+			altarRoom = altarCourage
 		}
 	}
-	var px, py int
-	switch ((int(Party._dir) - 1) ^ 2) & 3 {
-	case 2:
-		px, py = 0x60, 0x68
-	case 0:
-		px, py = 0x40, 0x48
-	case 3:
-		px, py = 0x70, 0x78
-	case 1:
-		px, py = 0x50, 0x58
+	side := (int(party.dir) + 1) % 4 // the side the party comes in by
+	xs := room[roomMembers+side*16:]
+	ys := xs[8:]
+	for i := 7; i >= 0; i-- {
+		battlefield.memberX[i], battlefield.memberY[i] = xs[i], ys[i]
 	}
-	for loc_B = 7; loc_B >= 0; loc_B-- {
-		Combat._charaX[loc_B] = loc_A[px+loc_B]
-		Combat._charaY[loc_B] = loc_A[py+loc_B]
-	}
-	for loc_B = int(Party.f_1d8) - 1; loc_B >= 0; loc_B-- {
-		if isCharaAlive(loc_B) {
-			Fighters._chtile[loc_B] = uint8(C_0ACF(loc_B))
-			D_944A[loc_B] = Fighters._chtile[loc_B]
-		} else {
-			Fighters._chtile[loc_B] = 0
+	setUpMembers()
+	for i := len(fighters.tile) - 1; i >= 0; i-- {
+		// Empty places (tile 0) are set up too: the original tested an array's address.
+		kind := room[roomMonsterTiles+i]
+		battlefield.monsterX[i] = room[roomMonsterX+i]
+		battlefield.monsterY[i] = room[roomMonsterY+i]
+		fighters.tile[i] = kind
+		fighters.baseTile[i] = kind
+		strength := int(monsterStrength[monsterIndex(kind)])
+		fighters.hp[i] = uint8(strength/2 | randomBelowSafe(strength))
+		if kind == tileMimic {
+			fighters.baseTile[i] = tileChest
 		}
 	}
-	for loc_B = 15; loc_B >= 0; loc_B-- {
-		/*C_817D*/
-		// bug in the original: "if(loc_A._010)" tests the array address, always true,
-		// so empty slots (tile 0) are set up as well.
-		Combat._npcX[loc_B] = loc_A[0x20+loc_B]
-		Combat._npcY[loc_B] = loc_A[0x30+loc_B]
-		Fighters._tile[loc_B] = loc_A[0x10+loc_B]
-		Fighters._gtile[loc_B] = loc_A[0x10+loc_B]
-		loc_C = int(D_23D2[C_7C25(loc_A[0x10+loc_B])])
-		Fighters._HP[loc_B] = uint8((loc_C >> 1) | U4_RND4(loc_C))
-		if Fighters._tile[loc_B] == TIL_AC {
-			Fighters._gtile[loc_B] = TIL_3C
-		}
-	}
-	for loc_B = 10; loc_B >= 0; loc_B-- {
-		for loc_C = 10; loc_C >= 0; loc_C-- {
-			Combat._map[loc_B*11+loc_C] = loc_A[0x80+loc_B*11+loc_C]
-		}
-	}
-	COM_main()
-	CurMode = uint16(D_95CC)
+	copy(battlefield.tiles[:], room[roomMap:roomMap+viewSize*viewSize])
+	fight()
+	gameMode = uint16(modeBeforeCombat)
 }
 
-func C_8214() {
-	if D_95CC == MOD_DUNGEON {
-		C_AE41()
+// afterFight redraws the dungeon (after a fight there) and drops the keys pressed meanwhile.
+func afterFight() {
+	if modeBeforeCombat == modeDungeon {
+		lookAround()
 	}
-	u_kbflush()
+	flushKeys()
 }
 
-func C_8228() int {
-	// bug in the original: "si >= (cond)?8:0" parses as "(si >= cond) ? 8 : 0", so the loop
-	// runs while si >= (outdoors ? 1 : 0)
-	lim := 0
-	if D_95CC == MOD_OUTDOORS {
-		lim = 1
+// freePersonSlot is a free place among the people for something left behind, else a random
+// one of the last 24. The original's loop ran down to 1 outdoors (it meant to stop at 8):
+// there finding none gives 0.
+func freePersonSlot() int {
+	lowest := 0
+	if modeBeforeCombat == modeOutdoors {
+		lowest = 1
 	}
-	si := 31
-	for ; si >= lim; si-- {
-		if D_8742._npc._tile[si] == 0 {
+	i := 31
+	for ; i >= lowest; i-- {
+		if area.people.tile[i] == 0 {
 			break
 		}
 	}
-	if si == -1 || (si == 7 && D_95CC == MOD_OUTDOORS) {
-		si = U4_RND3(24) + 8
+	if i == -1 || (i == 7 && modeBeforeCombat == modeOutdoors) {
+		i = randomBelow(24) + 8
 	}
-	return si
+	return i
 }
 
-func C_8283() {
-	si := int(D_96F8)
-	if si == TIL_80 {
-		// pirate ship becomes player ship
-		si = C_8228()
-		D_8742._npc._x[si] = D_9772
-		D_8742._npc._y[si] = D_9140
-		D_8742._npc._tile[si] = TIL_10
-		D_8742._npc._gtile[si] = TIL_10
-	} else if D_95CC == MOD_DUNGEON {
-		// monster leaves chest?
-		if si != TIL_94 && si != TIL_B4 && si != TIL_A0 {
-			if *D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)) == 0 {
-				*D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)) = 0x40
+// leaveSpoils leaves what the beaten foe had: a pirate its ship, others a chest (but bats,
+// insects, slimes and the like), in the dungeon in an empty room.
+func leaveSpoils() {
+	kind := int(encounterTile)
+	switch {
+	case kind == tilePirateWest:
+		i := freePersonSlot()
+		area.people.x[i], area.people.y[i] = foeX, foeY
+		area.people.tile[i] = tileShipWest
+		area.people.baseTile[i] = tileShipWest
+	case modeBeforeCombat == modeDungeon:
+		if kind != tileBat && kind != tileInsects && kind != tileSlime {
+			if here := area.dungeonRoom(int(party.z), int(party.y), int(party.x)); *here == dngCorridor {
+				*here = dngChest
 			}
 		}
-	} else if D_95CC != MOD_COM_CAMP || tile_cur < TIL_10 || tile_cur > TIL_13 {
-		// monster leaves chest?
-		if si >= TIL_90 || (si >= TIL_20 && si <= TIL_2E) || (si >= TIL_50 && si <= TIL_5E) {
-			if si != TIL_94 && si != TIL_A0 && si != TIL_B8 && si != TIL_B4 && si != TIL_DC {
-				if C_2999(D_946C) {
-					si = C_8228()
-					D_8742._npc._x[si] = D_9772
-					D_8742._npc._y[si] = D_9140
-					D_8742._npc._tile[si] = TIL_3C
-					D_8742._npc._gtile[si] = TIL_3C
-				}
-			}
+	case modeBeforeCombat != modeCombatCamp || hereTile < tileShipWest || hereTile > tileShipSouth:
+		carries := kind >= tileRat || (kind >= tileMage && kind <= tileShepherd) || (kind >= tileGuard && kind <= tileLordBritish)
+		switch kind {
+		case tileBat, tileSlime, tileGazer, tileInsects, tileWisp:
+			carries = false
+		}
+		if carries && isWalkable(foeGround) {
+			i := freePersonSlot()
+			area.people.x[i], area.people.y[i] = foeX, foeY
+			area.people.tile[i] = tileChest
+			area.people.baseTile[i] = tileChest
 		}
 	}
-	C_8214()
+	afterFight()
 }
 
-// altar rooms/dungeons connection
-//
-//	0x11 - deceit   - truth
-//	0x12 - despise  - love
-//	0x13 - destard  - courage
-//	0x14 - wrong    - truth love
-//	0x15 - covetous - love courage
-//	0x16 - shame    - truth courage
-//	0x17 - hythloth - truth love courage
-var D_261A = [3][4]uint8{
-	{0x11, 0x16, 0x17, 0x14}, // truth
-	{0x12, 0x14, 0x17, 0x15}, // love
-	{0x13, 0x15, 0x17, 0x16}, // courage
+// altarRoomExits: the altar room of each virtue (truth, love, courage) leads by its four
+// sides (north, east, south, west) into the dungeons of the virtues joined with it.
+var altarRoomExits = [3][4]uint8{
+	{locDeceit, locShame, locHythloth, locWrong},     // truth
+	{locDespise, locWrong, locHythloth, locCovetous}, // love
+	{locDestard, locCovetous, locHythloth, locShame}, // courage
 }
 
-func C_837A() {
-	si := 7
-	for ; ; si-- {
-		if si < 0 || Fighters._chtile[si] != 0 {
+// endCombat ends the battle: won, lost (all fled or fell), or a dungeon room left (an altar
+// room into another dungeon).
+func endCombat() {
+	membersLeft := false
+	for i := 7; i >= 0; i-- {
+		if fighters.memberTile[i] != 0 {
+			membersLeft = true
 			break
 		}
 	}
-
-	if si == -1 || CurMode == MOD_COM_ROOM {
-		if CurMode != MOD_COM_ROOM {
-			if C_0AFE(D_96F8) != 0 {
-				karma_inc(&Party._compa, 2)
-				karma_inc(&Party._justi, 2)
-			} else {
-				/*C_83CE:*/
-				u4_puts("Battle is lost!\n")
-				karma_dec(&Party._valor, 2)
-			}
-			C_8214()
-			return
+	if membersLeft && gameMode != modeCombatRoom {
+		printText("\nVictory!\n")
+		if !isGoodCreature(encounterTile) {
+			raiseKarma(&party.karmaValor, randomBits(1))
 		}
-		/*C_83E6:*/
-		u4_puts("Leave Room!\n")
-		if D_96EE == 0 {
-			if sc(D_96F4) < 0 {
-				Party._dir = DIR_N
-			} else {
-				Party._dir = DIR_S
-			}
-		} else {
-			if sc(D_96EE) < 0 {
-				Party._dir = DIR_W
-			} else {
-				Party._dir = DIR_E
-			}
+		if modeBeforeCombat != modeCombatCamp {
+			leaveSpoils()
 		}
-		if D_943E != -1 {
-			Party._loc = uint16(D_261A[D_943E][(Party._dir-1)&3])
-			Party.out_x = D_0844[Party._loc-1]
-			Party.out_y = D_0864[Party._loc-1]
-			u4_puts("into Dungeon\n")
-			u4_puts(D_1E98[127+int(Party._loc)-1])
-			File_DNG = nil
-			C_3E94()
-		}
-		Gra_CR()
-		u_kbflush()
-		Party._x = uint8(DNG_X_p(int(Party._x), int(Party._dir)))
-		Party._y = uint8(DNG_Y_p(int(Party._y), int(Party._dir)))
 		return
 	}
-	/*C_849E:*/
-	u4_puts("\nVictory!\n")
-	if C_0AFE(D_96F8) == 0 {
-		karma_inc(&Party._valor, U4_RND1(1))
+	if gameMode != modeCombatRoom {
+		if isGoodCreature(encounterTile) {
+			raiseKarma(&party.karmaCompassion, 2) // fled from a good creature
+			raiseKarma(&party.karmaJustice, 2)
+		} else {
+			printText("Battle is lost!\n")
+			lowerKarma(&party.karmaValor, 2)
+		}
+		afterFight()
+		return
 	}
-	if D_95CC != MOD_COM_CAMP {
-		C_8283()
+	printText("Leave Room!\n")
+	switch {
+	case fleeDirX == 0 && signedByte(fleeDirY) < 0:
+		party.dir = dirNorth
+	case fleeDirX == 0:
+		party.dir = dirSouth
+	case signedByte(fleeDirX) < 0:
+		party.dir = dirWest
+	default:
+		party.dir = dirEast
 	}
+	if altarRoom != noAltar {
+		party.loc = uint16(altarRoomExits[altarRoom][(party.dir+3)%4])
+		party.outX = placeX[party.loc-1]
+		party.outY = placeY[party.loc-1]
+		printText("into Dungeon\n")
+		printText(placeName(party.loc))
+		dungeonFile = nil
+		loadDungeon()
+	}
+	newLine()
+	flushKeys()
+	party.x = uint8(aheadX(int(party.x), int(party.dir)))
+	party.y = uint8(aheadY(int(party.y), int(party.dir)))
 }

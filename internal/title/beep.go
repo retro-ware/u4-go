@@ -1,7 +1,7 @@
 package title
 
-// Port of BEEP.ASM: sound_1, the error beep (AVATAR.EXE's sound(1)), and the clicks of the
-// "Ultima IV" dissolve.
+// Port of BEEP.ASM: the error beep (the game's sound(1)), and the clicks of the "Ultima IV"
+// dissolve.
 
 import (
 	"time"
@@ -9,11 +9,11 @@ import (
 	"github.com/memmaker/u4-go/internal/speaker"
 )
 
-func sound_1() { /*C_21BF*/
+func beep() { /*C_21BF*/
 	pace(speaker.Play(speaker.Beep))
 }
 
-// dissolveClicks counts the speaker clicks Gra_B made since the last clicks call.
+// dissolveClicks counts the speaker clicks dissolvePic made since the last clicks call.
 var dissolveClicks int
 
 // clicks turns the counted clicks into a buzz spread over d: n toggles over d sound like a

@@ -1,6 +1,6 @@
 package u4
 
-// Port of U4_TALK.C (signed char): talking to the citizens (.TLK records) and shop dispatch.
+// Talking to the citizens (their .TLK records), and the shops behind the counters.
 
 import (
 	"strings"
@@ -8,411 +8,451 @@ import (
 	"github.com/memmaker/u4-go/internal/music"
 )
 
-var D_2A7A = "Funny, no response!\n"
+func sayNoResponse() { printText("Funny, no response!\n") }
 
-var D_2A90 = [10]struct {
-	_00 string
-	_02 func()
-}{
-	{ /*D_2A3E*/ "bye", nil},
-	{ /*D_2A42*/ "name", TLK_name},
-	{ /*D_2A47*/ "look", TLK_look},
-	{ /*D_2A4C*/ "job", TLK_job},
-	{ /*D_2A50*/ "health", TLK_health},
-	{"", TLK_special1},
-	{"", TLK_special2},
-	{ /*D_2A57*/ "join", TLK_join},
-	{ /*D_2A5C*/ "give", TLK_give},
-	{ /*D_2A61*/ "", nil},
+// talkRecordSize is the size of a citizen's record in a .TLK file.
+const talkRecordSize = 288
+
+// citizen is a citizen's talk record.
+type citizen struct {
+	askAfter int  // the topic (index into topics) after which the citizen asks a question
+	humble   bool // the question tests humility
+	turnAway int  // how likely the citizen turns away (out of 256); a lot more: attacks
+	name     string
+	pronoun  string
+	look     string
+	job      string
+	health   string
+	answer   [2]string // the answers to the two keywords of their own
+	question string
+	yes, no  string // the replies to the answers to the question
+	keyword  [2]string
 }
 
-/*
-D_8CCE:
-0.name
-1.pronoun
-2.look
-3.job
-4.health
-5.personnal answer1
-6.personnal answer2
-7.special question
-8.special answer Y
-9.special answer N
-10.personnal question1
-11.personnal question2
-*/
-var D_8CCE [12]string
+// talking is the citizen being talked to, talkingTo their people slot.
+var (
+	talking   citizen
+	talkingTo int
+)
 
-/*special question*/
-func C_A163() {
-	var bp_04 [4]byte
+// readCitizen reads a citizen's record: three numbers, then twelve zero-terminated texts.
+func readCitizen(record []uint8) citizen {
+	c := citizen{askAfter: signedByte(record[0]), humble: record[1] != 0, turnAway: signedByte(record[2])}
+	texts := make([]string, 12)
+	rest := record[3:]
+	for i := range texts {
+		end := 0
+		for end < len(rest) && rest[end] != 0 {
+			end++
+		}
+		texts[i] = string(rest[:end])
+		rest = rest[min(end+1, len(rest)):]
+	}
+	c.name, c.pronoun, c.look, c.job, c.health = texts[0], texts[1], texts[2], texts[3], texts[4]
+	c.answer = [2]string{texts[5], texts[6]}
+	c.question, c.yes, c.no = texts[7], texts[8], texts[9]
+	c.keyword = [2]string{strings.TrimRight(texts[10], " "), strings.TrimRight(texts[11], " ")}
+	if c.look != "" { // "You see a ..." from "A ..."
+		if first := c.look[0]; first >= 'A' && first <= 'Z' {
+			c.look = string(first+'a'-'A') + c.look[1:]
+		}
+	}
+	return c
+}
 
-	Gra_CR()
-	u_kbread()
-	u4_puts(D_8CCE[7])
-	u4_puts( /*D_2A62*/ "\n\nYou say: ")
+// The topics, in the order a citizen's askAfter counts them.
+const (
+	topicBye = iota
+	topicName
+	topicLook
+	topicJob
+	topicHealth
+	topicKeyword1
+	topicKeyword2
+	topicJoin
+	topicGive
+)
+
+// topicWord is the word that asks after a topic: four letters of it are enough.
+func topicWord(topic int) string {
+	switch topic {
+	case topicBye:
+		return "bye"
+	case topicName:
+		return "name"
+	case topicLook:
+		return "look"
+	case topicJob:
+		return "job"
+	case topicHealth:
+		return "health"
+	case topicKeyword1:
+		return talking.keyword[0]
+	case topicKeyword2:
+		return talking.keyword[1]
+	case topicJoin:
+		return "join"
+	case topicGive:
+		return "give"
+	}
+	return ""
+}
+
+// The karma a citizen's question moves (once per talkKarmaMoves moves).
+const (
+	humilityCost   = 5
+	humilityReward = 10
+	charityReward  = 2
+	talkKarmaMoves = 16
+)
+
+// karmaTalkWindow is the stretch of moves the party is in: karma from talk rises once in it.
+func karmaTalkWindow() uint32 { return party.moves / talkKarmaMoves }
+
+// askQuestion asks the citizen's question, which wants a yes or a no.
+func askQuestion() {
+	newLine()
+	readKey()
+	printText(talking.question)
+	printText("\n\nYou say: ")
+	var answer byte
 	for {
-		u4_gets(bp_04[:], 4)
-		Gra_CR()
-		if bp_04[0] == 0 {
+		word := readWord(3)
+		newLine()
+		if word == "" {
+			return
+		}
+		answer = strings.ToUpper(word)[0]
+		if answer == 'Y' || answer == 'N' {
 			break
 		}
-		c := int(bp_04[0])
-		u4_toupper(&c) // u4_toupper2
-		bp_04[0] = byte(c)
-		if bp_04[0] != 'N' && bp_04[0] != 'Y' {
-			u4_puts( /*D_2A6E*/ "Yes or no!\n")
-		}
-		if bp_04[0] == 'N' || bp_04[0] == 'Y' {
-			break
-		}
+		printText("Yes or no!\n")
 	}
-	if bp_04[0] == 0 {
-		return
-	}
-	if bp_04[0] == 'Y' {
-		if D_95CE[1] != 0 {
-			karma_dec(&Party._humil, 5)
+	if answer == 'Y' {
+		if talking.humble {
+			lowerKarma(&party.karmaHumility, humilityCost)
 		}
-		u4_puts(D_8CCE[8])
+		printText(talking.yes)
 	} else {
-		if D_95CE[1] != 0 && uint32(Party._moves>>4) != uint32(Party.f_1ec) {
-			karma_inc(&Party._humil, 10)
+		if talking.humble && karmaTalkWindow() != uint32(party.lastKarmaTalk) {
+			raiseKarma(&party.karmaHumility, humilityReward)
 		}
-		u4_puts(D_8CCE[9])
+		printText(talking.no)
 	}
-	Party.f_1ec = uint16(Party._moves >> 4)
-	Gra_CR()
+	party.lastKarmaTalk = uint16(karmaTalkWindow())
+	newLine()
 }
 
-// C_A22D prints a string then CR; nil is the C's NULL pointer. (The C calls pass an extra,
-// ignored, leading argument.)
-func C_A22D(bp04 *string) {
-	if bp04 == nil {
+func printLine(text string) {
+	printText(text)
+	newLine()
+}
+
+func talkName() {
+	printText(talking.pronoun)
+	printText(" says: I am ")
+	printLine(talking.name)
+}
+
+func talkLook() {
+	printText("You see ")
+	printLine(talking.look)
+}
+
+// recruitTownes are the townes whose citizens may join: each of a class, mage to shepherd.
+const recruitTownes = locFirstTowne
+
+// virtueAdjectives are the virtues as said of a person.
+var virtueAdjectives = [8]string{
+	"honest",
+	"compassionate",
+	"valiant",
+	"just",
+	"sacrificial",
+	"honorable",
+	"spiritual",
+	"humble",
+}
+
+// The joining: a companion asks for half the virtue's karma (or the virtue done) and
+// 100 more maximum hit points of the leader per member.
+const (
+	joinKarma       = 40
+	joinHPPerMember = 100
+	recruitTalkIdx  = 1 // only the citizen with the first talk record of a towne may join
+	lastPersonSlot  = 31
+)
+
+func talkJoin() {
+	class := int(party.loc) - recruitTownes
+	if area.people.talkIndex[talkingTo] != recruitTalkIdx ||
+		class < 0 || class >= len(karmas) ||
+		class == int(signedByte(party.members[0].class)) {
+		printText(talking.pronoun)
+		printText(" says: I cannot join thee.\n")
 		return
 	}
-	u4_puts(*bp04)
-	Gra_CR()
-}
-
-func TLK_special1() { /*C_A245*/
-	C_A22D(&D_8CCE[5])
-}
-
-func TLK_special2() { /*C_A253*/
-	C_A22D(&D_8CCE[6])
-}
-
-func TLK_name() { /*C_A261*/
-	u4_puts(D_8CCE[1])
-	u4_puts( /*D_2AB8*/ " says: I am ")
-	u4_puts(D_8CCE[0])
-	Gra_CR()
-}
-
-func TLK_look() { /*C_A280*/
-	u4_puts( /*D_2AC5*/ "You see ")
-	C_A22D(&D_8CCE[2])
-}
-
-func TLK_job() { /*C_A299*/
-	C_A22D(&D_8CCE[3])
-}
-
-func TLK_health() { /*C_A2AB*/
-	C_A22D(&D_8CCE[4])
-}
-
-var D_2BB2 = [8]string{
-	/*D_2ACE*/ "honest",
-	/*D_2AD5*/ "compassionate",
-	/*D_2AE3*/ "valiant",
-	/*D_2AEB*/ "just",
-	/*D_2AF0*/ "sacrificial",
-	/*D_2AFC*/ "honorable",
-	/*D_2B06*/ "spiritual",
-	/*D_2B10*/ "humble",
-}
-
-var D_8CE6 uint16 /*type?*/
-
-func TLK_join() { /*C_A2BD*/
-	var bp_02 int
-
-	k := Party._loc - 0x05 // unsigned: the >= 8 test also catches non-towns
-	if uint16(D_8742._npc._tlkidx[D_8CE6]) != 1 ||
-		k >= 8 ||
-		k == uint16(int16(sc(Party.chara[0]._class))) {
-		u4_puts(D_8CCE[1])
-		u4_puts( /*D_2B17*/ " says: I cannot join thee.\n")
+	if *karmas[class] < joinKarma && *karmas[class] != 0 {
+		printText("Thou art not ")
+		printText(virtueAdjectives[class])
+		printText(" enough for me to join thee.\n")
 		return
 	}
-	if *pKarmas[k] < 40 && *pKarmas[k] != 0 {
-		u4_puts( /*D_2B33*/ "Thou art not ")
-		u4_puts(D_2BB2[k])
-		u4_puts( /*D_2B41*/ " enough for me to join thee.\n")
+	if joinHPPerMember*party.size+joinHPPerMember > party.members[0].maxHP {
+		printText("Thou art not experienced enough for me to join thee.\n")
 		return
 	}
-	if 100*Party.f_1d8+100 > Party.chara[0]._HP[1] { // 16-bit wrap
-		u4_puts( /*D_2B5F*/ "Thou art not experienced enough for me to join thee.\n")
-		return
-	}
-	u4_puts( /*D_2B95*/ "I am honored to join thee!\n")
-	D_8742._npc._tile[31] = 0
-	D_8742._npc._gtile[31] = 0
-	D_8742._npc._var[31] = 0
-	D_8742._npc._tlkidx[31] = 0
-	t_callback()
-	for bp_02 = 7; bp_02 >= 0; bp_02-- {
-		if uint16(int16(sc(Party.chara[bp_02]._class))) == k {
+	printText("I am honored to join thee!\n")
+	// Quirk: the original clears the last people slot, not the citizen who joined.
+	area.people.tile[lastPersonSlot] = 0
+	area.people.baseTile[lastPersonSlot] = 0
+	area.people.behaviour[lastPersonSlot] = 0
+	area.people.talkIndex[lastPersonSlot] = 0
+	redraw()
+	for m := len(party.members) - 1; m >= 0; m-- {
+		if signedByte(party.members[m].class) == class {
+			swapMembers(int(party.size), m)
 			break
 		}
 	}
-	if bp_02 != -1 {
-		C_6FF9(&Party.chara[Party.f_1d8], &Party.chara[bp_02])
-	}
-	Party.f_1d8++
-	Gra_13()
-	dspl_Stats()
+	party.size++
+	clearStatus()
+	showStats()
 }
 
-func TLK_give() { /*C_A3A2*/
-	if D_8742._npc._tile[D_8CE6] != TIL_58 {
-		u4_puts(D_8CCE[1])
-		u4_puts( /*D_2BC2*/ " says: I do not need thy gold.  Keep it!\n")
+func talkGive() {
+	if area.people.tile[talkingTo] != tileBeggar {
+		printText(talking.pronoun)
+		printText(" says: I do not need thy gold.  Keep it!\n")
 		return
 	}
-	u4_puts( /*D_2BEC*/ "How much?\x12\x12\x12\b\b")
-	bp_02 := int16(AskInt(2)) // int bp_02 = long
-	if bp_02 > 0 {
-		if Party._gold < uint16(bp_02) {
-			u4_puts( /*D_2BFB*/ "Thou hast not that much gold!\n")
-		} else {
-			Party._gold -= uint16(bp_02)
-			dspl_Stats()
-			u4_puts(D_8CCE[1])
-			u4_puts( /*D_2C1A*/ " says: Oh, Thank thee! I shall never forget thy kindness!\n")
-			if uint32(Party._moves>>4) != uint32(Party.f_1ec) {
-				karma_inc(&Party._compa, 2)
-			}
-			Party.f_1ec = uint16(Party._moves >> 4)
-		}
+	printText("How much?" + answerRoom(3))
+	amount := int16(askNumber(2))
+	if amount <= 0 {
+		return
 	}
-	C_A22D(nil)
+	if party.gold < uint16(amount) {
+		printText("Thou hast not that much gold!\n")
+		return
+	}
+	party.gold -= uint16(amount)
+	showStats()
+	printText(talking.pronoun)
+	printText(" says: Oh, Thank thee! I shall never forget thy kindness!\n")
+	if karmaTalkWindow() != uint32(party.lastKarmaTalk) {
+		raiseKarma(&party.karmaCompassion, charityReward)
+	}
+	party.lastKarmaTalk = uint16(karmaTalkWindow())
 }
 
-/*parse talk info*/
-func C_A443(si []byte) {
-	p := 0
-	for di := 0; di != 12; di++ {
-		q := p
-		for q < len(si) && si[q] != 0 { // C runs on; stay inside the record
-			q++
-		}
-		D_8CCE[di] = string(si[min(p, len(si)):q])
-		p = q + 1
+// answerTopic answers a topic; false to end the talk.
+func answerTopic(topic int) bool {
+	switch topic {
+	case topicBye:
+		return false
+	case topicName:
+		talkName()
+	case topicLook:
+		talkLook()
+	case topicJob:
+		printLine(talking.job)
+	case topicHealth:
+		printLine(talking.health)
+	case topicKeyword1:
+		printLine(talking.answer[0])
+	case topicKeyword2:
+		printLine(talking.answer[1])
+	case topicJoin:
+		talkJoin()
+	case topicGive:
+		talkGive()
 	}
-	if s := D_8CCE[2]; s != "" {
-		c := int(s[0])
-		u4_tolower(&c)
-		D_8CCE[2] = string([]byte{byte(c)}) + s[1:]
-	}
+	return true
 }
 
-// C_A47F strips trailing blanks (the C does it in place on the TLK buffer).
-func C_A47F(bp04 *string) {
-	*bp04 = strings.TrimRight(*bp04, " ")
-}
+// attackOffence is how far past the turning-away chance a citizen attacks instead.
+const attackOffence = 64
 
-/*talk to citizen*/
-func C_A4B4(bp04 int) {
-	var bp_02, bp_04 int
-
-	copy(D_95CE[:], at(File_TLK, int(uint16(int16((int(D_8742._npc._tlkidx[bp04])-1)*0x120)))))
-	bp_04 = int(Party.f_1d8)
-	D_9452 = D_8742._npc._tile[bp04]
-	C_A443(D_95CE[3:])
-	/*personnal question 1 & 2*/
-	D_2A90[5]._00 = D_8CCE[10]
-	D_2A90[6]._00 = D_8CCE[11]
-	C_A47F(&D_2A90[5]._00)
-	C_A47F(&D_2A90[6]._00)
-	/* */
-	u4_puts( /*D_2C55*/ "\nYou meet ")
-	C_A22D(&D_8CCE[2])
-	/*randomly says his name*/
-	if U4_RND1(1) != 0 {
-		Gra_CR()
-		u4_puts(D_8CCE[1])
-		u4_puts( /*D_2C60*/ " says: I am ")
-		u4_puts(D_8CCE[0])
-		Gra_CR()
+// talkTo talks to the citizen in people slot person.
+func talkTo(person int) {
+	record := (int(area.people.talkIndex[person]) - 1) * talkRecordSize
+	talking = readCitizen(at(talkFile, int(uint16(record))))
+	talkingTo = person
+	members := int(party.size)
+	foeTile = area.people.tile[person]
+	printText("\nYou meet ")
+	printLine(talking.look)
+	if randomBits(1) != 0 {
+		newLine()
+		talkName()
 	}
-	bp_02 = 0
 	for {
-		var si int
-		var bp_12 [12]byte
-
-		u4_puts( /*D_2C6D*/ "\nYour Interest:\n")
+		printText("\nYour Interest:\n")
 		getsWords = talkWords
-		u4_gets(bp_12[:], 11)
-		Gra_CR()
-		if bp_12[0] == 0 {
+		asked := readWord(10)
+		newLine()
+		if asked == "" {
 			break
 		}
-		si = int(u_rand_a())
-		if si < sc(D_95CE[2]) {
-			if sc(D_95CE[2])-si >= 0x40 {
-				/*he/she gets upset*/
-				if strnicmp([]byte(D_8CCE[0]) /*D_2C7E*/, "a ", 2) != 0 && strnicmp([]byte(D_8CCE[0]) /*D_2C81*/, "the ", 4) != 0 {
-					u4_puts(D_8CCE[0])
+		if chance := int(randomByte()); chance < talking.turnAway {
+			if talking.turnAway-chance >= attackOffence {
+				// A titled citizen ("a ...", "the ...") is named by pronoun.
+				lower := strings.ToLower(talking.name)
+				if !strings.HasPrefix(lower, "a ") && !strings.HasPrefix(lower, "the ") {
+					printText(talking.name)
 				} else {
-					u4_puts(D_8CCE[1])
+					printText(talking.pronoun)
 				}
-				u4_puts( /*D_2C86*/ " says: On guard! Fool!\n")
-				D_8742._npc._var[bp04] = 0xff
+				printText(" says: On guard! Fool!\n")
+				area.people.behaviour[person] = behaviourAttack
 			} else {
-				u4_puts(D_8CCE[1])
-				u4_puts( /*D_2C9E*/ " turns away!\n\n")
+				printText(talking.pronoun)
+				printText(" turns away!\n\n")
 			}
 			return
 		}
-		for si = 0; D_2A90[si]._00 != ""; si++ {
-			if strnicmp(bp_12[:], D_2A90[si]._00, 4) == 0 {
-				if D_2A90[si]._02 != nil {
-					Gra_CR()
-					D_8CE6 = uint16(bp04)
-					D_2A90[si]._02()
-					if int(Party.f_1d8) != bp_04 {
-						return /*looks like he/she has joined*/
-					}
-				} else {
-					bp_02 = 1
-				}
-				if bp_02 == 0 {
-					if sc(D_95CE[0]) == si {
-						C_A163()
-					}
-				}
+		// The topics are tried in order; an empty keyword of their own ends the list.
+		topic := topicBye
+		for ; topic <= topicGive && topicWord(topic) != ""; topic++ {
+			if sameWord(asked, topicWord(topic), 4) {
 				break
 			}
 		}
-		if D_2A90[si]._00 == "" {
-			u4_puts( /*D_2CAD*/ "That I cannot help thee with.\n")
+		if topic > topicGive || topicWord(topic) == "" {
+			printText("That I cannot help thee with.\n")
+			continue
 		}
-		if bp_02 != 0 {
+		if topic == topicBye {
 			break
 		}
-	}
-	u4_puts( /*D_2CCC*/ "\nBye.\n")
-}
-
-/*shops'y positions by town*/
-var D_2CD4 = [16][8]uint8{
-	{0x00, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x00, 0x00}, /*LB*/
-
-	{0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00}, /*lycaeum*/
-	{0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x00, 0x00}, /*empath*/
-	{0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00}, /*serpent*/
-
-	{0x00, 0x00, 0x0E, 0x00, 0x1A, 0x1B, 0x02, 0x00}, /*MOONGLOW*/
-	{0x03, 0x07, 0x06, 0x02, 0x00, 0x1D, 0x0C, 0x00}, /*BRITAIN*/
-	{0x09, 0x05, 0x00, 0x13, 0x00, 0x06, 0x1A, 0x00}, /*JHELOM*/
-	{0x00, 0x00, 0x18, 0x00, 0x00, 0x19, 0x00, 0x00}, /*YEW.ULT*/
-	{0x1C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00}, /*MINOC*/
-	{0x14, 0x18, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00}, /*TRINSIC*/
-	{0x00, 0x00, 0x11, 0x00, 0x04, 0x1B, 0x0D, 0x00}, /*SKARA*/
-	{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, /*MAGINCIA*/
-
-	{0x00, 0x04, 0x1A, 0x05, 0x07, 0x00, 0x00, 0x00}, /*paws*/
-	{0x0B, 0x11, 0x00, 0x19, 0x08, 0x00, 0x00, 0x07}, /*den*/
-	{0x14, 0x00, 0x00, 0x16, 0x00, 0x00, 0x15, 0x1A}, /*vesper*/
-	{0x00, 0x00, 0x00, 0x00, 0x00, 0x1A, 0x00, 0x00}, /*cove*/
-}
-
-/*shops functions callbacks*/
-var D_2D54 = [10]func(){
-	SHP_weapon,
-	SHP_armor,
-	SHP_food,
-	SHP_pub,
-	SHP_reagent,
-	SHP_healer,
-	SHP_inn,
-	SHP_guild,
-
-	SHP_horse,
-	SHP_hawkwind,
-}
-
-/*shop at Y*/
-func C_A686(bp04 uint8) {
-	var si int
-
-	for si = 7; si >= 0; si-- {
-		if D_2CD4[Party._loc-1][si] == bp04 {
-			break
+		newLine()
+		answerTopic(topic)
+		if int(party.size) != members {
+			return // they joined
+		}
+		if talking.askAfter == topic {
+			askQuestion()
 		}
 	}
-	if si == -1 && bp04 == 0x18 && Party._loc == 0x0d {
-		si = 8 /*patch! paws' horses*/
+	printText("\nBye.\n")
+}
+
+// The shops, in the order of the towns' counters.
+const (
+	shopWeapons = iota
+	shopArmour
+	shopFood
+	shopPub
+	shopReagents
+	shopHealer
+	shopInn
+	shopGuild
+	shopHorses
+	shopHawkwind
+)
+
+// shopCounters is the row of each shop's counter in each town (0: none).
+var shopCounters = [16][8]uint8{
+	locCastleBritannia - 1: {shopHealer: 26},
+	locLycaeum - 1:         {shopHealer: 12},
+	locEmpathAbbey - 1:     {shopHealer: 15},
+	locSerpentsHold - 1:    {shopHealer: 12},
+	locMoonglow - 1:        {shopFood: 14, shopReagents: 26, shopHealer: 27, shopInn: 2},
+	locBritain - 1:         {3, 7, 6, 2, 0, 29, 12, 0},
+	locJhelom - 1:          {9, 5, 0, 19, 0, 6, 26, 0},
+	locYew - 1:             {shopFood: 24, shopHealer: 25},
+	locMinoc - 1:           {shopWeapons: 28, shopInn: 3},
+	locTrinsic - 1:         {shopWeapons: 20, shopArmour: 24, shopPub: 2, shopInn: 3},
+	locSkaraBrae - 1:       {shopFood: 17, shopReagents: 4, shopHealer: 27, shopInn: 13},
+	locMagincia - 1:        {},
+	locPaws - 1:            {shopArmour: 4, shopFood: 26, shopPub: 5, shopReagents: 7},
+	locBuccaneersDen - 1:   {11, 17, 0, 25, 8, 0, 0, 7},
+	locVesper - 1:          {shopWeapons: 20, shopPub: 22, shopInn: 21, shopGuild: 26},
+	locCove - 1:            {shopHealer: 26},
+}
+
+// The two shops not in the table: the horses of Paws and Hawkwind at the castle.
+const (
+	pawsHorsesRow  = 24
+	britainHawkRow = 25
+)
+
+var shops = [10]func(){
+	shopWeapons:  visitWeaponShop,
+	shopArmour:   visitArmourShop,
+	shopFood:     visitFoodShop,
+	shopPub:      visitPub,
+	shopReagents: visitReagentShop,
+	shopHealer:   visitHealer,
+	shopInn:      visitInn,
+	shopGuild:    visitGuild,
+	shopHorses:   visitHorseSeller,
+	shopHawkwind: visitHawkwind,
+}
+
+// visitShop opens the shop whose counter is on row.
+func visitShop(row uint8) {
+	shop := len(shopCounters[0]) - 1
+	for shop >= 0 && shopCounters[party.loc-1][shop] != row {
+		shop--
 	}
-	if si == -1 && bp04 == 0x19 && Party._loc == 0x01 {
-		si = 9 /*patch! LB's hawkwind*/
+	if shop == -1 && row == pawsHorsesRow && party.loc == locPaws {
+		shop = shopHorses
 	}
-	if si == -1 {
-		u4_puts(D_2A7A)
+	if shop == -1 && row == britainHawkRow && party.loc == locCastleBritannia {
+		shop = shopHawkwind
+	}
+	if shop == -1 {
+		sayNoResponse()
 		return
 	}
 	music.Play(music.Shopping)
-	D_2D54[si]()
+	shops[shop]()
 }
 
-func CMD_Talk() { /*C_A6F3*/
-	var loc_A, loc_E uint8
-	var loc_B, loc_C, loc_D int
+// isLetterTile says whether the tile is one of the letters of a shop's counter sign.
+func isLetterTile(t uint8) bool { return t >= tileLetterA && t <= tileBlank }
 
-	u4_puts( /*D_2D68*/ "Talk\n")
-	if Party.f_1dc != 0 {
-		w_DriftOnly()
+func cmdTalk() {
+	printText("Talk\n")
+	if party.flyingOrLight != 0 {
+		sayDriftOnly()
 		return
 	}
-	AskDir( /*D_2D6E*/ "Dir: ", &loc_B, &loc_D)
-	if loc_B|loc_D == 0 {
+	dx, dy := askDirection("Dir: ")
+	if dx|dy == 0 {
 		return
 	}
-	loc_E = uint8(int(Party._x) + loc_B)
-	loc_A = uint8(int(Party._y) + loc_D)
-	loc_C = C_0A8B(loc_E, loc_A)
-	if loc_E > 31 || loc_A > 31 || Party._loc == 0 {
-		u4_puts(D_2A7A)
+	x := uint8(int(party.x) + dx)
+	y := uint8(int(party.y) + dy)
+	person := objectAt(x, y)
+	if x >= townTiles || y >= townTiles || party.loc == 0 {
+		sayNoResponse()
 		return
 	}
-	if *D_8742.x32x32(int(loc_A), int(loc_E)) >= TIL_60 &&
-		*D_8742.x32x32(int(loc_A), int(loc_E)) <= TIL_7E {
-		/*alphabet*/
-		loc_E = uint8(int(loc_E) + loc_B)
-		loc_A = uint8(int(loc_A) + loc_D)
-		if loc_E > 31 || loc_A > 31 {
-			u4_puts(D_2A7A)
+	if isLetterTile(*area.townTile(int(y), int(x))) { // talk across the counter
+		x = uint8(int(x) + dx)
+		y = uint8(int(y) + dy)
+		if x >= townTiles || y >= townTiles {
+			sayNoResponse()
 			return
 		}
-		loc_C = C_0A8B(loc_E, loc_A)
-		if loc_C == -1 || D_8742._npc._tile[loc_C] != TIL_52 {
-			u4_puts(D_2A7A)
+		person = objectAt(x, y)
+		if person == -1 || area.people.tile[person] != tileMerchant {
+			sayNoResponse()
 			return
 		}
-		C_A686(uint8(int(loc_A) - loc_D))
+		visitShop(uint8(int(y) - dy))
 		return
 	}
-	if loc_C == -1 || D_8742._npc._tlkidx[loc_C] == 0 {
-		u4_puts(D_2A7A)
+	if person == -1 || area.people.talkIndex[person] == 0 {
+		sayNoResponse()
 		return
 	}
-	if D_8742._npc._tile[loc_C] == TIL_5E {
+	if area.people.tile[person] == tileLordBritish {
 		music.Play(music.LordBritish)
-		C_E59B()
+		talkToLordBritish()
 		return
 	}
-	C_A4B4(loc_C)
+	talkTo(person)
 }

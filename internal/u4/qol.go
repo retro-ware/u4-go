@@ -17,12 +17,12 @@ type promptKind int
 const (
 	pNone   promptKind = iota
 	pCmd               // a command loop's key (world, dungeon or combat)
-	pDir               // AskDir
-	pLetter            // AskLetter
-	pChara             // AskChara
-	pYN                // AskY_N
-	pWords             // u4_gets with known answers (getsWords)
-	pText              // u4_gets: free text
+	pDir               // askDirection
+	pLetter            // askLetter
+	pChara             // askMember
+	pYN                // askYesNo
+	pWords             // readLine with known answers (getsWords)
+	pText              // readLine: free text
 	pKeys              // a key read with its own answers (askKeys)
 )
 
@@ -31,9 +31,9 @@ var (
 	promptText string
 	promptLo   int
 	promptHi   int
-	// getsWords are the answers offered for the next u4_gets: set by its caller.
+	// getsWords are the answers offered for the next readLine: set by its caller.
 	getsWords   []string
-	askingChara bool // AskChara is asking through AskLetter
+	askingChara bool // askMember is asking through askLetter
 	// promptItems are pKeys' answers.
 	promptItems []host.MenuItem
 	// histLine is the text window's line being written, for the history.
@@ -49,7 +49,7 @@ func ask(k promptKind) {
 	host.NewPrompt()
 }
 
-// waiting is set while u_kbread waits for a key.
+// waiting is set while readKey waits for a key.
 var waiting bool
 
 func init() { setHooks() }
@@ -59,7 +59,7 @@ func setHooks() {
 	host.Hover = nil
 	host.PromptMenu = promptMenu
 	host.MapClick = mapClick
-	host.Glyphs = func() [][64]byte { return drv.Glyphs[:] }
+	host.Glyphs = func() [][64]byte { return screen.Glyphs[:] }
 	host.BackKey = backKey
 	host.ScreenClick = screenClick
 }
@@ -74,16 +74,16 @@ func askKeys(title string, items ...host.MenuItem) {
 func backKey() uint16 {
 	switch prompt {
 	case pWords, pText:
-		return KBD_ENTER
+		return keyEnter
 	case pCmd:
 		return 0
 	}
-	return KBD_ESC
+	return keyEsc
 }
 
 // screenClick turns a click on the original layout's map window into a mapClick.
 func screenClick(x, y int) ([]uint16, bool) {
-	if !host.InWorld || x < 8 || x >= 184 || y < 8 || y >= 184 || CurMode == MOD_DUNGEON {
+	if !host.InWorld || x < 8 || x >= 184 || y < 8 || y >= 184 || gameMode == modeDungeon {
 		return nil, false
 	}
 	keys, ok := mapClick((x-8)/16-5, (y-8)/16-5)
@@ -95,18 +95,18 @@ var talkWords = []string{"Name", "Job", "Health", "Look", "Join", "Give", "Bye"}
 // usableItems are the Use command's words for what the party carries.
 func usableItems() []string {
 	var w []string
-	if Party.mStones != 0 {
+	if party.stones != 0 {
 		w = append(w, "Stone")
 	}
 	for _, it := range []struct {
 		bit  int
 		name string
-	}{{ST_BELL, "Bell"}, {ST_BOOK, "Book"}, {ST_CANDLE, "Candle"}, {ST_HORN, "Horn"}, {ST_WHEEL, "Wheel"}, {ST_SKULL, "Skull"}} {
-		if TST_MSK(Party.mItems, it.bit) {
+	}{{itemBell, "Bell"}, {itemBook, "Book"}, {itemCandle, "Candle"}, {itemHorn, "Horn"}, {itemWheel, "Wheel"}, {itemSkull, "Skull"}} {
+		if hasBit(party.items, it.bit) {
 			w = append(w, it.name)
 		}
 	}
-	if Party.mItems&(1<<ST_KEY_T|1<<ST_KEY_L|1<<ST_KEY_C) != 0 {
+	if party.items&(1<<itemKeyTruth|1<<itemKeyLove|1<<itemKeyCourage) != 0 {
 		w = append(w, "Key")
 	}
 	return w
@@ -115,17 +115,17 @@ func usableItems() []string {
 // stoneColors are the colours of the stones the party carries.
 func stoneColors() []string {
 	var w []string
-	for i, c := range D_0884 {
-		if TST_MSK8(Party.mStones, i) {
+	for i, c := range colorNames {
+		if hasBit(party.stones, i) {
 			w = append(w, c)
 		}
 	}
 	return w
 }
 
-// histPut follows u4_putc into the history line.
+// histPut follows printChar into the history line.
 func histPut(c byte) {
-	if txt_Y < 12 || txt_X < 24 { // only the text window, not the status box or the borders
+	if textRow < 12 || textCol < 24 { // only the text window, not the status box or the borders
 		return
 	}
 	switch {
@@ -133,7 +133,7 @@ func histPut(c byte) {
 		if len(histLine) > 0 {
 			histLine = histLine[:len(histLine)-1]
 		}
-	case c >= ' ' && c < 0x7f:
+	case c >= ' ' && c <= lastPrintable:
 		histLine = append(histLine, c)
 	}
 }
@@ -147,13 +147,13 @@ func histCR() {
 func dirKey(dx, dy int) uint16 {
 	switch {
 	case dy < 0:
-		return KBD_UP
+		return keyUp
 	case dy > 0:
-		return KBD_DOWN
+		return keyDown
 	case dx < 0:
-		return KBD_LEFT
+		return keyLeft
 	}
-	return KBD_RIGHT
+	return keyRight
 }
 
 var dirNames = []struct {
@@ -182,8 +182,8 @@ func promptMenu(asked bool) *host.Menu {
 		return m
 	case pChara:
 		m := &host.Menu{Title: "Who"}
-		for i := 0; i < int(Party.f_1d8); i++ {
-			m.Items = append(m.Items, item(fmt.Sprintf("%d %s", i+1, cstr(Party.chara[i]._name[:])), key(byte('1'+i))))
+		for i := 0; i < int(party.size); i++ {
+			m.Items = append(m.Items, item(fmt.Sprintf("%d %s", i+1, cstr(party.members[i].name[:])), key(byte('1'+i))))
 		}
 		return m
 	case pYN:
@@ -197,9 +197,9 @@ func promptMenu(asked bool) *host.Menu {
 			for i := 0; i < len(w); i++ {
 				keys = append(keys, key(w[i]))
 			}
-			m.Items = append(m.Items, item(w, append(keys, KBD_ENTER)...))
+			m.Items = append(m.Items, item(w, append(keys, keyEnter)...))
 		}
-		m.Items = append(m.Items, host.MenuItem{Label: "Type...", Keyboard: true}, item("(nothing)", KBD_ENTER))
+		m.Items = append(m.Items, host.MenuItem{Label: "Type...", Keyboard: true}, item("(nothing)", keyEnter))
 		return m
 	case pText:
 		if !asked {
@@ -212,46 +212,46 @@ func promptMenu(asked bool) *host.Menu {
 	return nil
 }
 
-// letterMenu offers AskLetter's letters, named after the prompt's subject, else after the
+// letterMenu offers askLetter's letters, named after the prompt's subject, else after the
 // list the game just printed ("A-Dagger" lines of a shop).
 func letterMenu() *host.Menu {
-	m := &host.Menu{Title: strings.TrimRight(promptText, "\x12\b :?")}
+	m := &host.Menu{Title: strings.TrimRight(promptText, string(rune(glyphBlank))+"\b :?")}
 	name := func(c int) string { return "" }
 	named := promptLo >= 'A' // only the named letters are offered
 	switch {
 	case strings.HasPrefix(promptText, "Spell") || strings.HasPrefix(promptText, "For Spell"):
 		name = func(c int) string {
-			return fmt.Sprintf("%-10s %2d", D_1E98[101+c-'A'], Party._mixtures[c-'A'])
+			return fmt.Sprintf("%-10s %2d", spellNames[c-'A'], party.mixtures[c-'A'])
 		}
 	case strings.HasPrefix(promptText, "Weapon"):
 		name = func(c int) string {
 			i := c - 'A'
 			if i == 0 {
-				return D_1E98[37]
+				return weaponNames[0]
 			}
-			if Party._weapons[i] == 0 {
+			if party.weapons[i] == 0 {
 				return ""
 			}
-			return fmt.Sprintf("%-12s %2d", D_1E98[37+i], Party._weapons[i])
+			return fmt.Sprintf("%-12s %2d", weaponNames[i], party.weapons[i])
 		}
 	case strings.HasPrefix(promptText, "Armour"):
 		name = func(c int) string {
 			i := c - 'A'
 			if i == 0 {
-				return D_1E98[53]
+				return armorNames[0]
 			}
-			if Party._armors[i] == 0 {
+			if party.armors[i] == 0 {
 				return ""
 			}
-			return fmt.Sprintf("%-12s %2d", D_1E98[53+i], Party._armors[i])
+			return fmt.Sprintf("%-12s %2d", armorNames[i], party.armors[i])
 		}
 	case strings.HasPrefix(promptText, "Reagent"):
 		name = func(c int) string {
 			i := c - 'A'
-			if Party._reagents[i] == 0 {
+			if party.reagents[i] == 0 {
 				return ""
 			}
-			return fmt.Sprintf("%-12s %2d", D_1E98[93+i], Party._reagents[i])
+			return fmt.Sprintf("%-12s %2d", reagentNames[i], party.reagents[i])
 		}
 	case promptLo >= 'A':
 		listed := printedChoices()
@@ -275,8 +275,8 @@ func letterMenu() *host.Menu {
 		}
 		m.Items = append(m.Items, item(label, key(byte(c))))
 	}
-	if promptText == "Reagent:\x12\x12\b" {
-		m.Items = append(m.Items, item("(done)", KBD_ENTER))
+	if promptText == "Reagent:"+answerRoom(2) {
+		m.Items = append(m.Items, item("(done)", keyEnter))
 	}
 	return m
 }
@@ -307,27 +307,27 @@ func commandItems() []host.MenuItem {
 		}
 	}
 	mixtures := false
-	for _, n := range Party._mixtures {
+	for _, n := range party.mixtures {
 		mixtures = mixtures || n != 0
 	}
 	switch {
-	case CurMode >= MOD_COMBAT:
+	case gameMode >= modeCombat:
 		m = append(m, item("Attack", key('a')))
 		when(mixtures, "Cast", 'c')
 		when(true, "Ready weapon", 'r')
 		when(len(usableItems()) > 0, "Use item", 'u')
 		when(true, "Ztats", 'z')
-	case CurMode == MOD_DUNGEON:
-		t := tile_cur & 0xf0
-		when(t == 0x10 || t == 0x30, "Klimb ladder", 'k')
-		when(t == 0x20 || t == 0x30, "Descend ladder", 'd')
-		when(t == 0x40, "Get chest", 'g')
+	case gameMode == modeDungeon:
+		kind := dngKind(hereTile)
+		when(kind == dngLadderUp || kind == dngLadderUpDown, "Klimb ladder", 'k')
+		when(kind == dngLadderDown || kind == dngLadderUpDown, "Descend ladder", 'd')
+		when(kind == dngChest, "Get chest", 'g')
 		when(mixtures, "Cast", 'c')
 		when(true, "Hole up & camp", 'h')
-		when(Party._torches != 0, "Ignite torch", 'i')
+		when(party.torches != 0, "Ignite torch", 'i')
 		when(true, "Mix reagents", 'm')
-		when(Party.f_1d8 > 1, "New order", 'n')
-		when(Party._gems != 0, "Peer at gem", 'p')
+		when(party.size > 1, "New order", 'n')
+		when(party.gems != 0, "Peer at gem", 'p')
 		when(true, "Save game", 'q')
 		when(true, "Ready weapon", 'r')
 		when(true, "Search", 's')
@@ -336,23 +336,23 @@ func commandItems() []host.MenuItem {
 		when(true, "Ztats", 'z')
 	default:
 		m = worldContext()
-		when(Party._tile == TIL_18 && Party.f_1dc == 0, "Klimb (lift off)", 'k')
-		when(Party._tile == TIL_18 && Party.f_1dc != 0, "Descend (land)", 'd')
+		when(party.tile == tileBalloon && party.flyingOrLight == 0, "Klimb (lift off)", 'k')
+		when(party.tile == tileBalloon && party.flyingOrLight != 0, "Descend (land)", 'd')
 		when(mixtures, "Cast", 'c')
-		when(Party._loc == 0, "Hole up & camp", 'h')
-		when(Party._sextants != 0 && Party._loc == 0, "Locate", 'l')
+		when(party.loc == 0, "Hole up & camp", 'h')
+		when(party.sextants != 0 && party.loc == 0, "Locate", 'l')
 		when(true, "Mix reagents", 'm')
-		when(Party.f_1d8 > 1, "New order", 'n')
-		when(Party._gems != 0, "Peer at gem", 'p')
-		when(Party._loc == 0, "Save game", 'q')
+		when(party.size > 1, "New order", 'n')
+		when(party.gems != 0, "Peer at gem", 'p')
+		when(party.loc == 0, "Save game", 'q')
 		when(true, "Ready weapon", 'r')
 		when(true, "Search", 's')
 		when(len(usableItems()) > 0, "Use item", 'u')
 		when(true, "Wear armour", 'w')
-		when(Party._tile == TIL_14 || Party._tile == TIL_15, "Yell", 'y')
+		when(party.tile == tileHorseWest || party.tile == tileHorseEast, "Yell", 'y')
 		when(true, "Ztats", 'z')
 	}
-	m = append(m, item("Volume", key('v')), item("Pass", KBD_SPACE))
+	m = append(m, item("Volume", key('v')), item("Pass", keySpace))
 	all := &host.Menu{Title: "All commands", Pause: true}
 	for i, name := range allCommands {
 		all.Items = append(all.Items, item(name, key(byte('a'+i))))
@@ -370,60 +370,60 @@ var allCommands = []string{"Attack", "Board", "Cast", "Descend", "Enter", "Fire"
 func worldContext() []host.MenuItem {
 	var m []host.MenuItem
 	for _, d := range dirNames {
-		x, y := int(Party._x)+d.dx, int(Party._y)+d.dy
+		x, y := int(party.x)+d.dx, int(party.y)+d.dy
 		dk := dirKey(d.dx, d.dy)
-		if i := C_0A8B(uint8(x), uint8(y)); i >= 0 {
-			t := D_8742._npc._tile[i]
-			if Party._loc != 0 && D_8742._npc._tlkidx[i] != 0 {
-				m = append(m, item("Talk "+d.name+": "+C_1513(t), key('t'), dk))
-			} else if Party._loc == 0 || t >= TIL_80 {
-				m = append(m, item("Attack "+d.name+": "+C_1513(t), key('a'), dk))
+		if i := objectAt(uint8(x), uint8(y)); i >= 0 {
+			t := area.people.tile[i]
+			if party.loc != 0 && area.people.talkIndex[i] != 0 {
+				m = append(m, item("Talk "+d.name+": "+creatureName(t), key('t'), dk))
+			} else if party.loc == 0 || t >= tilePirateWest {
+				m = append(m, item("Attack "+d.name+": "+creatureName(t), key('a'), dk))
 			}
 		}
-		if Party._loc == 0 || x < 0 || x > 31 || y < 0 || y > 31 {
+		if party.loc == 0 || x < 0 || x > 31 || y < 0 || y > 31 {
 			continue
 		}
-		t := *D_8742.x32x32(y, x)
+		t := *area.townTile(y, x)
 		switch {
-		case t >= TIL_60 && t <= TIL_7E: // a counter: the merchant behind it
+		case t >= tileLetterA && t <= tileBlank: // a counter: the merchant behind it
 			x2, y2 := x+d.dx, y+d.dy
-			if i := C_0A8B(uint8(x2), uint8(y2)); x2 >= 0 && x2 < 32 && y2 >= 0 && y2 < 32 && i >= 0 &&
-				D_8742._npc._tile[i] == TIL_52 {
+			if i := objectAt(uint8(x2), uint8(y2)); x2 >= 0 && x2 < 32 && y2 >= 0 && y2 < 32 && i >= 0 &&
+				area.people.tile[i] == tileMerchant {
 				m = append(m, item("Talk "+d.name+": merchant", key('t'), dk))
 			}
-		case t == TIL_3B && d.dy == 0:
+		case t == tileDoor && d.dy == 0:
 			m = append(m, item("Open door "+d.name, key('o'), dk))
-		case t == TIL_3A && d.dy == 0:
+		case t == tileLockedDoor && d.dy == 0:
 			m = append(m, item("Jimmy lock "+d.name, key('j'), dk))
 		}
 	}
 	switch {
-	case tile_cur == TIL_3C && Party._tile == TIL_1F:
+	case hereTile == tileChest && party.tile == tileOnFoot:
 		m = append(m, item("Get chest", key('g')))
-	case Party._tile == TIL_1F && (tile_cur == TIL_14 || tile_cur == TIL_15 || tile_cur == TIL_18 ||
-		(tile_cur >= TIL_10 && tile_cur <= TIL_13)):
+	case party.tile == tileOnFoot && (hereTile == tileHorseWest || hereTile == tileHorseEast || hereTile == tileBalloon ||
+		(hereTile >= tileShipWest && hereTile <= tileShipSouth)):
 		m = append(m, item("Board", key('b')))
 	}
-	if Party._tile != TIL_1F {
-		if Party._tile >= TIL_10 && Party._tile <= TIL_13 {
+	if party.tile != tileOnFoot {
+		if party.tile >= tileShipWest && party.tile <= tileShipSouth {
 			m = append(m, item("Fire cannon", key('f')))
 		}
-		if Party._tile != TIL_18 || Party.f_1dc == 0 {
+		if party.tile != tileBalloon || party.flyingOrLight == 0 {
 			m = append(m, item("X-it craft", key('x')))
 		}
 	}
-	if Party._loc == 0 && Party._tile != TIL_18 {
-		for i := range D_0844 {
-			if Party._x == D_0844[i] && Party._y == D_0864[i] {
-				m = append(m, item("Enter "+D_1E98[127+i], key('e')))
+	if party.loc == 0 && party.tile != tileBalloon {
+		for i := range placeX {
+			if party.x == placeX[i] && party.y == placeY[i] {
+				m = append(m, item("Enter "+placeNames[i], key('e')))
 			}
 		}
 	}
-	if Party._loc == 1 {
-		switch tile_cur {
-		case TIL_1B:
+	if party.loc == 1 {
+		switch hereTile {
+		case tileLadderUp:
 			m = append(m, item("Klimb ladder", key('k')))
-		case TIL_1C:
+		case tileLadderDown:
 			m = append(m, item("Descend ladder", key('d')))
 		}
 	}
@@ -433,9 +433,9 @@ func worldContext() []host.MenuItem {
 // mapClick turns a click on the map into keys: a step or a direction toward the tile, or
 // the key a "press a key" wait wants. The party's own tile opens the command menu.
 func mapClick(dx, dy int) ([]uint16, bool) {
-	if CurMode >= MOD_COMBAT { // the combat map is the view: relative to the active fighter
-		a := int(activeChara)
-		dx, dy = dx+5-int(Combat._charaX[a]), dy+5-int(Combat._charaY[a])
+	if gameMode >= modeCombat { // the combat map is the view: relative to the active fighter
+		a := int(activeMember)
+		dx, dy = dx+5-int(battlefield.memberX[a]), dy+5-int(battlefield.memberY[a])
 	}
 	if abs(dx) >= abs(dy) {
 		dy = 0
@@ -448,7 +448,7 @@ func mapClick(dx, dy int) ([]uint16, bool) {
 	case prompt == pCmd || prompt == pDir && (dx != 0 || dy != 0):
 		return []uint16{dirKey(dx, dy)}, true
 	case waiting && prompt == pNone:
-		return []uint16{KBD_SPACE}, true
+		return []uint16{keySpace}, true
 	}
 	return nil, true
 }

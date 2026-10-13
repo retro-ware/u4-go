@@ -1,49 +1,22 @@
 package u4
 
-// Ports of U4_SHRIN.C (meditating at the shrines) and U4_END.C (the Abyss chamber and the
-// ending).
+// The shrines (meditation, visions and partial avatarhood) and the Chamber of the Codex at
+// the bottom of the Abyss, with the ending.
 
 import (
+	"strings"
+
 	"github.com/memmaker/u4-go/internal/host"
 	"github.com/memmaker/u4-go/internal/music"
 )
 
-// strnicmp compares the C string in a with b, ignoring case, for at most n characters.
-func strnicmp(a []byte, b string, n int) int {
-	lc := func(c byte) byte {
-		if c >= 'A' && c <= 'Z' {
-			return c + 'a' - 'A'
-		}
-		return c
-	}
-	at := func(i int) byte {
-		if i < len(a) {
-			return a[i]
-		}
-		return 0
-	}
-	for i := 0; i < n; i++ {
-		x, y := lc(at(i)), byte(0)
-		if i < len(b) {
-			y = lc(b[i])
-		}
-		if x != y {
-			return int(x) - int(y)
-		}
-		if x == 0 {
-			return 0
-		}
-	}
-	return 0
-}
+// ---- The shrines ----
 
-// ---- U4_SHRIN.C ----
+// mantras are the words chanted at each virtue's shrine.
+var mantras = [8]string{"ahm", "mu", "ra", "beh", "cah", "summ", "om", "lum"}
 
-// mantras
-var D_8322 = [8]string{"ahm", "mu", "ra", "beh", "cah", "summ", "om", "lum"}
-
-// visions
-var D_8332 = [8][3]string{
+// visions are what each shrine shows after one, two or three cycles of meditation.
+var visions = [8][3]string{
 	{
 		"Take not the gold of others found in towns and castles for yours it is not!\n",
 		"Cheat not the merchants and peddlers for tis an evil thing to do!\n",
@@ -86,104 +59,116 @@ var D_8332 = [8][3]string{
 	},
 }
 
-// visions 2
-var D_8362 = [8]string{"rune_1", "rune_2", "rune_0", "rune_1", "rune_2", "rune_1", "rune_3", "rune_4"} // I N F I N I T Y
+// avatarhoodRunes are the EGA pictures of the letters I N F I N I T Y, one a virtue.
+var avatarhoodRunes = [8]string{"rune_1", "rune_2", "rune_0", "rune_1", "rune_2", "rune_1", "rune_3", "rune_4"}
 
-// display avatarhood vision I.N.F.I.N.I.T.Y
-func C_E6DF(bp04 int) {
-	CurMode = MOD_VISION
-	Gra_10()
-	if drv.IsVGA() { // the VGA patch has a picture a letter: rune_1..8
-		Gra_16("rune_"+string(rune('1'+bp04))+".ega", 0, nil)
+// showAvatarhoodRune shows the virtue's letter of INFINITY on the map.
+func showAvatarhoodRune(virtue int) {
+	gameMode = modeVision
+	clearMap()
+	if screen.IsVGA() { // the VGA patch has a picture a letter: rune_1..8
+		loadPicture("rune_"+string(rune('1'+virtue))+".ega", 0, nil)
 		return
 	}
-	Gra_16(D_8362[bp04]+".ega", 0, nil)
+	loadPicture(avatarhoodRunes[virtue]+".ega", 0, nil)
 }
 
-// enter a shrine
-func C_E72C() {
-	var loc_D [16]byte
-	loc_A := int(Party._loc) - 0x19 // shrine "number"
-	leave := func() {
-		CurMode = MOD_OUTDOORS
-		Party._loc = 0
-	}
-	if !TST_MSK8(Party.mRunes, loc_A) {
-		u4_puts("\nThou dost not bear the rune of entry!  A strange force keeps you out!\n")
-		leave()
+// Meditation: up to maxCycles cycles of cycleSeconds, once every meditationMoves moves.
+const (
+	maxCycles       = 3
+	cycleSeconds    = 16
+	meditationMoves = 100
+	mantraKarmaCost = 3
+	cycleKarma      = 3 // spirituality for every cycle
+	avatarhoodKarma = 99
+	shrineWordLen   = 14
+)
+
+// leaveShrine puts the party back outdoors.
+func leaveShrine() {
+	gameMode = modeOutdoors
+	party.loc = 0
+}
+
+func enterShrine() {
+	virtue := int(party.loc) - locFirstShrine
+	if !hasBit(party.runes, virtue) {
+		printText("\nThou dost not bear the rune of entry!  A strange force keeps you out!\n")
+		leaveShrine()
 		return
 	}
-	Load("SHRINE.CON", Combat._map[:])
-	CurMode = MOD_SHRINE
+	Load("SHRINE.CON", battlefield.tiles[:])
+	gameMode = modeShrine
 	music.Play(music.Shrine)
-	u4_puts("\nYou enter the ancient shrine and sit before the altar...\nUpon what virtue dost thou meditate?\n")
-	u4_gets(loc_D[:], 15)
-	Gra_CR()
-	u4_puts("\nFor how many\n")
-	loc_E := AskLetter("Cycles (0-3)?\x12\x12\b", '0', '3')
-	if loc_E < 0 {
-		leave()
+	printText("\nYou enter the ancient shrine and sit before the altar...\nUpon what virtue dost thou meditate?\n")
+	subject := readWord(shrineWordLen)
+	newLine()
+	printText("\nFor how many\n")
+	cycles := askLetter("Cycles (0-3)?"+answerRoom(2), '0', '0'+maxCycles)
+	if cycles < 0 {
+		leaveShrine()
 		return
 	}
-	loc_E -= '0'
-	if loc_E == 0 || strnicmp(loc_D[:], D_1E98[151+loc_A], 16) != 0 {
-		u4_puts("\nThou art unable to focus thy thoughts on this subject!\n")
-		leave()
+	cycles -= '0'
+	if cycles == 0 || !strings.EqualFold(subject, virtueNames[virtue]) {
+		printText("\nThou art unable to focus thy thoughts on this subject!\n")
+		leaveShrine()
 		return
 	}
-	if Party._moves/100 == uint32(Party.f_1ea) {
-		u4_puts("\nThy mind is still weary from thy last Meditation!\n")
-		leave()
+	if party.moves/meditationMoves == uint32(party.lastMeditation) {
+		printText("\nThy mind is still weary from thy last Meditation!\n")
+		leaveShrine()
 		return
 	}
-	Party.f_1ea = uint16(Party._moves / 100)
-	u4_puts("Begin Meditation\n")
-	for loc_B := 0; loc_B < loc_E; loc_B++ {
-		for loc_C := 0; loc_C < 0x10; loc_C++ {
-			u_delay(1, 0)
-			u4_putc('.')
+	party.lastMeditation = uint16(party.moves / meditationMoves)
+	printText("Begin Meditation\n")
+	for range cycles {
+		for range cycleSeconds {
+			waitSeconds(1, false)
+			printChar('.')
 		}
-		u_kbflush()
-		u4_puts("\nMantra: ")
-		u4_gets(loc_D[:], 15)
-		Gra_CR()
-		if strnicmp(loc_D[:], D_8322[loc_A], 0x10) != 0 {
-			u4_puts("\nThou art not able to focus thy thoughts with that Mantra!\n")
-			karma_dec(&Party._spiri, 3)
-			leave()
+		flushKeys()
+		printText("\nMantra: ")
+		mantra := readWord(shrineWordLen)
+		newLine()
+		if !strings.EqualFold(mantra, mantras[virtue]) {
+			printText("\nThou art not able to focus thy thoughts with that Mantra!\n")
+			lowerKarma(&party.karmaSpirituality, mantraKarmaCost)
+			leaveShrine()
 			return
 		}
 	}
-	if loc_E != 3 || *pKarmas[loc_A] != 99 {
-		u4_puts("\nThy thoughts are pure. Thou art granted a vision!\n")
-		karma_inc(&Party._spiri, loc_E*3)
-		u_kbflush()
-		u_kbread()
-		Gra_CR()
-		u4_puts(D_8332[loc_A][loc_E-1])
+	if cycles != maxCycles || *karmas[virtue] != avatarhoodKarma {
+		printText("\nThy thoughts are pure. Thou art granted a vision!\n")
+		raiseKarma(&party.karmaSpirituality, cycles*cycleKarma)
+		flushKeys()
+		readKey()
+		newLine()
+		printText(visions[virtue][cycles-1])
 	} else {
-		u4_puts("\nThou hast achieved partial Avatarhood in the Virtue of\n")
-		u4_puts(D_1E98[151+loc_A])
-		Gra_09()
-		sound(9, 0xff)
-		Gra_09()
-		Gra_CR()
-		*pKarmas[loc_A] = 0
-		dspl_Stats()
-		u_kbflush()
-		u_kbread()
-		u4_puts("\n\nThou art granted a vision!\n")
-		C_E6DF(loc_A)
-		u_kbflush()
+		printText("\nThou hast achieved partial Avatarhood in the Virtue of\n")
+		printText(virtueNames[virtue])
+		invertMap()
+		sound(soundSweep, 255)
+		invertMap()
+		newLine()
+		*karmas[virtue] = 0 // a virtue raised to an avatar's
+		showStats()
+		flushKeys()
+		readKey()
+		printText("\n\nThou art granted a vision!\n")
+		showAvatarhoodRune(virtue)
+		flushKeys()
 	}
-	u_kbread()
-	Gra_CR()
-	leave()
+	readKey()
+	newLine()
+	leaveShrine()
 }
 
-// ---- U4_END.C ----
+// ---- The Chamber of the Codex ----
 
-var D_0BDA = [11]string{
+// codexQuestions are the voice's questions: the eight virtues, then the three principles.
+var codexQuestions = [11]string{
 	"What dost thou possess if all may rely upon your every word?",
 	"What quality compels one to share in the journeys of others?",
 	"What answers when great deeds are called for?",
@@ -197,56 +182,77 @@ var D_0BDA = [11]string{
 	"What turns not away from any peril?",
 }
 
-func C_2F7E() {
-	u_delay(15, 1)
-	if u_kbhit() != 0 {
-		u_kbread()
+// principles are the answers to the last three questions.
+var principles = [3]string{"truth", "love", "courage"}
+
+// virtuePictures are the pictures shown for each virtue answered.
+var virtuePictures = [8]string{"honesty", "compassn", "valor", "justice", "sacrific", "honor", "spirit", "humility"}
+
+// pauseForReading waits 15 seconds or a key.
+func pauseForReading() {
+	waitSeconds(15, true)
+	if keyWaiting() {
+		readKey()
 	}
 }
 
-var D_0BF0 = [13]uint8{0xE7, 0x53, 0x23, 0x3B, 0x9E, 0x69, 0x17, 0xBA, 0xD8, 0x1D, 0x91, 0x59, 0xE9}
-var D_0BFE = [13]uint8{0x88, 0x69, 0xDD, 0x2C, 0x15, 0xB7, 0x81, 0xAC, 0x6A, 0x30, 0xF3, 0x6A, 0xE9}
-
-var D_8CCA uint16
-
-// return to surface
-func C_2F9D(bp04 int) {
-	u_delay(5, 0)
-	Gra_CR()
-	Party._x = D_0BF0[bp04]
-	Party._y = D_0BFE[bp04]
-	Party.f_1d8 = D_8CCA
-	Party._loc = 0
-	CurMode = MOD_OUTDOORS
-	spell_cnt = 0
-	hit_tile = 0
-	spell_sta = 7
-	D_9440 = 1
-	D_95C6 = 0
-	Party.f_1dc = 0
-	C_26B6()
-	dspl_Stats()
-	u_kbflush()
-	longjmp_D_9458()
+// returnPlaces are where a party turned back from the Codex is put on the surface: one for
+// each of the eleven questions failed, one for the last question, and the Abyss's entrance
+// for passage denied.
+var returnPlaces = [13]struct{ x, y uint8 }{
+	{231, 136}, {83, 105}, {35, 221}, {59, 44}, {158, 21}, {105, 183}, {23, 129}, {186, 172},
+	{216, 106}, {29, 48}, {145, 243},
+	{89, 106},
+	{233, 233},
 }
 
-// passage is not granted
-func C_3010() {
-	u4_puts("\nPassage is not granted.\n")
-	C_2F9D(12)
+const (
+	returnAfterLast = 11
+	returnDenied    = 12
+	codexPartySize  = 8
+	codexAnswerLen  = 14
+	codexTries      = 3
+)
+
+// partyBeforeCodex is the party's size before it entered the chamber alone.
+var partyBeforeCodex uint16
+
+// returnToSurface puts the party back on the surface, and back to the commands.
+func returnToSurface(place int) {
+	waitSeconds(5, false)
+	newLine()
+	party.x = returnPlaces[place].x
+	party.y = returnPlaces[place].y
+	party.size = partyBeforeCodex
+	party.loc = 0
+	gameMode = modeOutdoors
+	spellTurns = 0
+	hitTile = 0
+	activeSpell = effectNone
+	lineOfSight = 1
+	gallopStep = 0
+	party.flyingOrLight = 0
+	centerMap()
+	showStats()
+	flushKeys()
+	backToCommands()
 }
 
-// Victory !
-func C_3025() {
-	u_delay(2, 0)
-	shakefx()
-	shakefx()
-	shakefx()
-	shakefx()
-	u_delay(3, 0)
+func denyPassage() {
+	printText("\nPassage is not granted.\n")
+	returnToSurface(returnDenied)
+}
+
+// victory: the Codex is revealed, and the game ends.
+func victory() {
+	waitSeconds(2, false)
+	for range 4 {
+		shakeScreen()
+	}
+	waitSeconds(3, false)
 	music.Play(music.Fanfare)
-	Gra_17() // infinity symbol
-	u_delay(3, 0)
+	showInfinity()
+	waitSeconds(3, false)
 	for _, s := range []string{
 		"\n\nThe boundless knowledge of the Codex of Ultimate Wisdom is revealed unto thee.",
 		"\n\nThe voice says: Thou hast proven thyself to be truly good in nature.",
@@ -255,141 +261,129 @@ func C_3025() {
 		"\n\nFor if thou dost stray from the paths of virtue, thy way may be lost forever.",
 		"\n\nReturn now unto thine own world. Live there as an example to thy people, as our memory of thy gallant deeds serves us.",
 	} {
-		u4_puts(s)
-		C_2F7E()
+		printText(s)
+		pauseForReading()
 	}
-	Gra_10()
-	u4_puts("\n\nAs the sound of the voice trails off, darkness seems to rise around you. There is a moment of intense, wrenching vertigo.")
-	C_2F7E()
-	Gra_16("stoncrcl.ega", 0, nil)
+	clearMap()
+	printText("\n\nAs the sound of the voice trails off, darkness seems to rise around you. There is a moment of intense, wrenching vertigo.")
+	pauseForReading()
+	loadPicture("stoncrcl.ega", 0, nil)
 	for _, s := range []string{
 		"\n\nYou open your eyes to a familiar circle of stones.  You wonder of your recent adventures.",
 		"\n\nIt seems a time and place very distant.  You wonder if it really happened. Then you realize that in your hand you hold The Ankh.",
 		"\n\nYou walk away from the circle, knowing that you can always return from whence you came, since you now know the secret of the gates.",
 	} {
-		u4_puts(s)
-		C_2F7E()
+		printText(s)
+		pauseForReading()
 	}
-	u4_puts("\n\nCONGRATULATIONS!\n   Thou hast\n   completed\n   ULTIMA IV\n  Quest of the\n    AVATAR\n  in ")
-	u4_putl(int32(Party._moves), 0, '0')
-	u4_puts("\n turns! Report\n thy feat unto\nLord British at\nOrigin Systems!")
-	for { // while(1);
+	printText("\n\nCONGRATULATIONS!\n   Thou hast\n   completed\n   ULTIMA IV\n  Quest of the\n    AVATAR\n  in ")
+	printNumber(int32(party.moves), 0, '0')
+	printText("\n turns! Report\n thy feat unto\nLord British at\nOrigin Systems!")
+	for { // the game is over
 		host.Yield()
 	}
 }
 
-func C_310F(bp06, bp04 string) bool {
-	var bp_10 [16]byte
-	for try := 0; try < 3; try++ {
+// askCodex asks the question up to three times; true for the right answer.
+func askCodex(question, answer string) bool {
+	for try := range codexTries {
 		if try > 0 {
-			u_delay(1, 0)
-			u4_puts("\nThy thoughts are not pure.\nI ask again.\n")
-			u_delay(2, 0)
+			waitSeconds(1, false)
+			printText("\nThy thoughts are not pure.\nI ask again.\n")
+			waitSeconds(2, false)
 		}
-		u4_puts(bp06)
-		Gra_CR()
-		Gra_CR()
-		u4_gets(bp_10[:], 15)
-		Gra_CR()
-		if strnicmp(bp_10[:], bp04, 15) == 0 {
+		printText(question)
+		newLine()
+		newLine()
+		said := readWord(codexAnswerLen)
+		newLine()
+		if strings.EqualFold(said, answer) {
 			return true
 		}
 	}
 	return false
 }
 
-var D_161A = [3]string{"truth", "love", "courage"}
-var D_1620 = [8]string{"honesty", "compassn", "valor", "justice", "sacrific", "honor", "spirit", "humility"}
-
-// last phase of game ?
-func C_31F4() {
-	var bp_12 [16]byte
-	D_8CCA = Party.f_1d8
-	Party.f_1d8 = 1
-	CurMode = MOD_VISION
-	Gra_13()
-	dspl_Stats()
-	Gra_10()
+// enterCodexChamber: the last altar of the Abyss leads the party's leader alone before the
+// Codex, to answer the voice's questions.
+func enterCodexChamber() {
+	partyBeforeCodex = party.size
+	party.size = 1
+	gameMode = modeVision
+	clearStatus()
+	showStats()
+	clearMap()
 	music.Play(music.Stop)
-	u4_puts("\n\n\nThere is a sudden darkness, and you find yourself alone in an empty chamber.\n")
-	u_delay(4, 0)
-	Gra_16("key7.ega", 0, nil)
-	if !TST_MSK(Party.mItems, ST_KEY_C) || !TST_MSK(Party.mItems, ST_KEY_T) || !TST_MSK(Party.mItems, ST_KEY_L) {
-		u4_puts("\nThou dost not have the Key of Three Parts.\n")
-		C_2F9D(12)
+	printText("\n\n\nThere is a sudden darkness, and you find yourself alone in an empty chamber.\n")
+	waitSeconds(4, false)
+	loadPicture("key7.ega", 0, nil)
+	if !hasBit(party.items, itemKeyCourage) || !hasBit(party.items, itemKeyTruth) || !hasBit(party.items, itemKeyLove) {
+		printText("\nThou dost not have the Key of Three Parts.\n")
+		returnToSurface(returnDenied)
 	}
-	u4_puts("\nYou use your Key of Three Parts.\n")
-	u_delay(3, 0)
-	u4_puts("\nA voice rings out:\n")
-	if !C_310F("\"What is the Word of Passage?\"", "veramocor") {
-		C_3010()
+	printText("\nYou use your Key of Three Parts.\n")
+	waitSeconds(3, false)
+	printText("\nA voice rings out:\n")
+	if !askCodex("\"What is the Word of Passage?\"", "veramocor") {
+		denyPassage()
 	}
-	if D_8CCA != 8 {
-		u4_puts("\nThou hast not proved thy leadership in all eight virtues.\n")
-		u_delay(8, 0)
-		C_3010()
+	if partyBeforeCodex != codexPartySize {
+		printText("\nThou hast not proved thy leadership in all eight virtues.\n")
+		waitSeconds(8, false)
+		denyPassage()
 	}
-	for bp_02 := 7; bp_02 >= 0; bp_02-- {
-		if *pKarmas[bp_02] != 0 {
-			u4_puts("\nThou art not ready.\n")
-			C_3010()
+	for v := len(karmas) - 1; v >= 0; v-- {
+		if *karmas[v] != 0 {
+			printText("\nThou art not ready.\n")
+			denyPassage()
 		}
 	}
-	u4_puts("\nPassage is granted.\n")
-	u_delay(5, 0)
-	Gra_10()
-	for bp_02 := 0; bp_02 < 11; bp_02++ {
-		u_delay(2, 0)
-		u4_puts("\n\nThe voice asks:\n\n")
-		u_delay(2, 0)
-		ans := ""
-		if bp_02 <= 7 {
-			ans = D_1E98[151+bp_02]
+	printText("\nPassage is granted.\n")
+	waitSeconds(5, false)
+	clearMap()
+	for q, question := range codexQuestions {
+		waitSeconds(2, false)
+		printText("\n\nThe voice asks:\n\n")
+		waitSeconds(2, false)
+		answer, picture := "", ""
+		if q < len(virtueNames) {
+			answer, picture = virtueNames[q], virtuePictures[q]
 		} else {
-			ans = D_161A[bp_02-8]
+			answer = principles[q-len(virtueNames)]
+			picture = answer
 		}
-		if !C_310F(D_0BDA[bp_02], ans) {
-			u_delay(1, 0)
-			u4_puts("\nThy quest is not yet complete.\n")
-			C_2F9D(bp_02)
+		if !askCodex(question, answer) {
+			waitSeconds(1, false)
+			printText("\nThy quest is not yet complete.\n")
+			returnToSurface(q)
 		}
-		pic := ""
-		if bp_02 >= 8 {
-			pic = D_161A[bp_02-8]
-		} else {
-			pic = D_1620[bp_02]
-		}
-		Gra_16(pic+".ega", 0, nil)
-		if bp_02 == 7 {
-			u_delay(3, 0)
-			u4_puts("\nThou art well versed in the virtues of the Avatar.\n")
-			u_delay(5, 0)
+		loadPicture(picture+".ega", 0, nil)
+		if q == len(virtueNames)-1 {
+			waitSeconds(3, false)
+			printText("\nThou art well versed in the virtues of the Avatar.\n")
+			waitSeconds(5, false)
 		}
 	}
-	u4_puts("\n\nThe floor rumbles beneath your feet.\n")
-	shakefx()
-	shakefx()
-	u_delay(5, 0)
-	u4_puts("\nAbove the din, the voice asks:\n\nIf all eight virtues of the Avatar combine into and are derived from the Three Principles of Truth, Love and Courage...")
-	C_2F7E()
-	u4_puts("\n\nThen what is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n")
-	u4_gets(bp_12[:], 15)
-	Gra_CR()
-	if strnicmp(bp_12[:], "infinity", 16) != 0 {
-		ok := false
-		for try := 0; try < 2 && !ok; try++ {
-			u4_puts("\nThy thoughts are not pure.\nI ask again.\n")
-			u_delay(3, 0)
-			u4_puts("\n\nWhat is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n")
-			u4_gets(bp_12[:], 15)
-			Gra_CR()
-			ok = strnicmp(bp_12[:], "infinity", 16) == 0
+	printText("\n\nThe floor rumbles beneath your feet.\n")
+	shakeScreen()
+	shakeScreen()
+	waitSeconds(5, false)
+	printText("\nAbove the din, the voice asks:\n\nIf all eight virtues of the Avatar combine into and are derived from the Three Principles of Truth, Love and Courage...")
+	pauseForReading()
+	printText("\n\nThen what is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n")
+	said := readWord(codexAnswerLen)
+	newLine()
+	for try := 1; !strings.EqualFold(said, "infinity"); try++ {
+		if try == codexTries {
+			waitSeconds(1, false)
+			printText("\nThou dost not know the true nature of the Universe.\n")
+			returnToSurface(returnAfterLast)
 		}
-		if !ok {
-			u_delay(1, 0)
-			u4_puts("\nThou dost not know the true nature of the Universe.\n")
-			C_2F9D(11)
-		}
+		printText("\nThy thoughts are not pure.\nI ask again.\n")
+		waitSeconds(3, false)
+		printText("\n\nWhat is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n")
+		said = readWord(codexAnswerLen)
+		newLine()
 	}
-	C_3025()
+	victory()
 }

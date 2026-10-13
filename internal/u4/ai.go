@@ -1,521 +1,493 @@
 package u4
 
-// Port of U4_AI.C (signed char): town/dungeon creature shuffling and the combat AI.
+// The monsters' minds: wandering the dungeon levels, and fighting.
 
-// aiCombatMap is Combat_MAP(y, x) with the C's unchecked indexing: outside the 11x11 map
-// (creatures that fled, probes at x/y >= 11) the C reads whatever follows; we read 0.
-func aiCombatMap(y, x int) uint8 {
-	i := y*11 + x
-	if i < 0 || i >= len(Combat._map) {
+// combatTileAt is the battlefield's tile (y, x). Off the 11x11 field (a monster that fled,
+// a look past the edge) the original read whatever followed; this reads 0.
+func combatTileAt(y, x int) uint8 {
+	i := y*viewSize + x
+	if i < 0 || i >= len(battlefield.tiles) {
 		return 0
 	}
-	return Combat._map[i]
+	return battlefield.tiles[i]
 }
 
-func C_93A5(bp08, bp06 uint8, bp04 int) bool {
-	bp_02 := *D_8742.x8x8x8(int(Party._z), int(bp06), int(bp08))
-	if bp_02&0x0f == 0 {
-		if bp_02&0xe0 != 0x80 &&
-			bp_02&0xf0 != 0xa0 &&
-			bp_02&0xf0 != 0xd0 &&
-			bp_02&0xf0 != 0xf0 {
-			if U4_RND1(7) == 0 || D_8742._npc._old_x[bp04] != bp08 || D_8742._npc._old_y[bp04] != bp06 {
-				return true
-			}
-		}
+// dungeonMonsterCanEnter says whether dungeon monster i may move to room (x, y) of the
+// party's level: an empty room that is no trap, fountain, field, battle room or wall, and
+// (but one time in eight) not the room it came from.
+func dungeonMonsterCanEnter(x, y uint8, i int) bool {
+	room := *area.dungeonRoom(int(party.z), int(y), int(x))
+	if dngDetail(room) != 0 {
+		return false // a monster is there
 	}
-	return false
-}
-
-func C_9414() {
-	var loc_A, loc_C, loc_D int
-	var loc_E, loc_F uint8
-	n := &D_8742._npc
-
-	for loc_B := 31; loc_B >= 0; loc_B-- {
-		if n._tile[loc_B] != 0 &&
-			int16(n._var[loc_B]) == Party._z &&
-			n._tile[loc_B] != TIL_B0 &&
-			n._tile[loc_B] != TIL_AC {
-			if Party._x != n._x[loc_B] || Party._y != n._y[loc_B] {
-				for loc_D = 7; loc_D >= 0; loc_D-- {
-					loc_A = isign(sc(u_rand_a()))
-					loc_C = isign(sc(u_rand_a()))
-					if U4_RND1(1) != 0 && loc_A != 0 {
-						loc_E = uint8(int(n._x[loc_B])+loc_A) & 7
-						loc_F = n._y[loc_B]
-						if C_93A5(loc_E, loc_F, loc_B) {
-							break
-						}
-					}
-					if loc_C != 0 {
-						loc_E = n._x[loc_B]
-						loc_F = uint8(int(n._y[loc_B])+loc_C) & 7
-						if C_93A5(loc_E, loc_F, loc_B) {
-							break
-						}
-					}
-					loc_E = uint8(int(n._x[loc_B])+loc_A) & 7
-					loc_F = n._y[loc_B]
-					if C_93A5(loc_E, loc_F, loc_B) {
-						break
-					}
-				}
-				if loc_D != -1 {
-					*D_8742.x8x8x8(int(Party._z), int(loc_F), int(loc_E)) |= uint8((int(n._tile[loc_B])-TIL_90)/4 + 1)
-					*D_8742.x8x8x8(int(Party._z), int(n._y[loc_B]), int(n._x[loc_B])) &= 0xf0
-					n._old_x[loc_B] = n._x[loc_B]
-					n._old_y[loc_B] = n._y[loc_B]
-					n._x[loc_B] = loc_E
-					n._y[loc_B] = loc_F
-				}
-			}
-		}
+	switch dngKind(room) {
+	case dngTrap, dngFountain, dngField, dngRoom, dngWall:
+		return false
 	}
-	t_callback()
+	return randomBits(7) == 0 || area.people.oldX[i] != x || area.people.oldY[i] != y
 }
 
-func C_95AA() {
-	n := &D_8742._npc
-	for loc_A := int(Party._z)*4 + 1; loc_A >= 0; loc_A-- {
-		if (loc_A >> 2) < int(Party._z) {
-			break
+// wrapLevel wraps a coordinate round a dungeon level.
+func wrapLevel(c int) uint8 { return uint8(c) % levelSize }
+
+// moveDungeonMonsters lets the monsters of the party's level (but reapers and mimics) wander
+// a room, trying up to eight random directions, and marks them on the level's map.
+func moveDungeonMonsters() {
+	people := &area.people
+	for i := len(people.tile) - 1; i >= 0; i-- {
+		kind := people.tile[i]
+		if kind == 0 || int16(people.behaviour[i]) != party.z || kind == tileReaper || kind == tileMimic {
+			continue // behaviour holds a dungeon monster's level
 		}
-		if n._tile[loc_A] == 0 {
-			loc_B := uint8(U4_RND1(7))
-			loc_D := uint8(U4_RND1(7))
-			if Party._x != loc_B && Party._y != loc_D {
-				if *D_8742.x8x8x8(int(Party._z), int(loc_D), int(loc_B)) == 0 {
-					loc_C := uint8((U4_RND1(3)+int(Party._z))*4 + TIL_90)
-					if loc_C != TIL_AC {
-						n._tile[loc_A] = loc_C
-						n._x[loc_A] = loc_B
-						n._old_x[loc_A] = loc_B
-						n._y[loc_A] = loc_D
-						n._old_y[loc_A] = loc_D
-						n._var[loc_A] = uint8(Party._z)
-						*D_8742.x8x8x8(int(Party._z), int(loc_D), int(loc_B)) = ((loc_C - 0x90) >> 2) + 1
-					}
-				}
+		x, y := people.x[i], people.y[i]
+		if party.x == x && party.y == y {
+			continue
+		}
+		var toX, toY uint8
+		canEnter := func(nx, ny uint8) bool {
+			toX, toY = nx, ny
+			return dungeonMonsterCanEnter(nx, ny, i)
+		}
+		found := false
+		for range 8 {
+			dx := randomSign()
+			dy := randomSign()
+			if randomBits(1) != 0 && dx != 0 && canEnter(wrapLevel(int(x)+dx), y) ||
+				dy != 0 && canEnter(x, wrapLevel(int(y)+dy)) ||
+				canEnter(wrapLevel(int(x)+dx), y) {
+				found = true
+				break
 			}
 		}
+		if !found {
+			continue
+		}
+		*area.dungeonRoom(int(party.z), int(toY), int(toX)) |= uint8((int(kind)-tileRat)/4 + 1)
+		*area.dungeonRoom(int(party.z), int(y), int(x)) = dngKind(*area.dungeonRoom(int(party.z), int(y), int(x)))
+		people.oldX[i], people.oldY[i] = x, y
+		people.x[i], people.y[i] = toX, toY
+	}
+	redraw()
+}
+
+// spawnDungeonMonsters fills the party's level's two monster places, when free, with
+// monsters the stronger the deeper the level, in empty rooms.
+func spawnDungeonMonsters() {
+	people := &area.people
+	z := int(party.z)
+	for slot := z*4 + 1; slot >= z*4 && slot >= 0; slot-- {
+		if people.tile[slot] != 0 {
+			continue
+		}
+		x := uint8(randomBits(7))
+		y := uint8(randomBits(7))
+		// The original asks for both coordinates to differ from the party's.
+		if party.x == x || party.y == y || *area.dungeonRoom(z, int(y), int(x)) != dngCorridor {
+			continue
+		}
+		kind := uint8((randomBits(3)+z)*4 + tileRat)
+		if kind == tileMimic {
+			continue
+		}
+		people.tile[slot] = kind
+		people.x[slot], people.oldX[slot] = x, x
+		people.y[slot], people.oldY[slot] = y, y
+		people.behaviour[slot] = uint8(party.z)
+		*area.dungeonRoom(z, int(y), int(x)) = (kind-tileRat)/4 + 1
 	}
 }
 
-func C_9683() int {
-	for si := int(Party.f_1d8); si > 0; {
-		si--
-		if isCharaAlive(si) && hit_x == Combat._charaX[si] && hit_y == Combat._charaY[si] {
-			return si
+// memberUnderHit is the living party member where the missile is (hitX, hitY), or -1.
+func memberUnderHit() int {
+	for i := int(party.size) - 1; i >= 0; i-- {
+		if isAlive(i) && hitX == battlefield.memberX[i] && hitY == battlefield.memberY[i] {
+			return i
 		}
 	}
 	return -1
 }
 
-func C_96B9(bp06, bp04 int) bool {
-	Gra_11(bp06)
-	C_3C54()
-	sound(7)
-	hit_tile = 0
-	C_3C54()
-	bp_02 := uint16(U4_RND4(int(D_23D2[C_7C25(Fighters._tile[bp04])]) >> 2))
-	bp_02 = (bp_02>>4)*10 + (bp_02 % 10)
-	Gra_11(bp06)
-	if hitChara(bp06, int(bp_02)) == 0 {
-		dspl_Stats()
+// monsterHurts lets monster hurt member, by up to a quarter of its strength; it reports
+// whether the member died.
+func monsterHurts(member, monster int) bool {
+	invertStatusLine(member)
+	drawCombat()
+	sound(soundMemberHit)
+	hitTile = 0
+	drawCombat()
+	damage := randomBelowSafe(int(monsterStrength[monsterIndex(fighters.tile[monster])]) / 4)
+	// The original took the damage for binary-coded decimal, reading its high four bits as
+	// the tens: 27 (one 16 and 11) counts 1*10 + 27%10 = 17.
+	damage = damage/16*10 + damage%10
+	invertStatusLine(member)
+	if !damageMember(member, damage) {
+		showStats()
 		return false
 	}
-	u4_puts(cstr(Party.chara[bp06]._name[:]))
-	u4_puts( /*D_29CA*/ " is Killed!\n")
-	karma_inc(&Party._sacri, 1)
-	dspl_Stats()
-	C_10FD()
-
+	printText(cstr(party.members[member].name[:]))
+	printText(" is Killed!\n")
+	raiseKarma(&party.karmaSacrifice, 1)
+	showStats()
+	checkPartyAlive()
 	return true
 }
 
-func C_9764(bp04 int) {
-	Gra_11(bp04)
-	C_3C54()
-	sound(7)
-	Gra_11(bp04)
-	hit_tile = 0
+// flashMemberHit flashes member's status line on the battlefield.
+func flashMemberHit(member int) {
+	invertStatusLine(member)
+	drawCombat()
+	sound(soundMemberHit)
+	invertStatusLine(member)
+	hitTile = 0
 }
 
-// monster projectile?: bp0a: type, bp08: monster id
-func C_978C(bp0a uint8, bp08, bp06, bp04 int) {
-	hit_tile = uint16(bp0a)
-	hit_x = Combat._npcX[bp08]
-	hit_y = Combat._npcY[bp08]
-	sound(3)
-	si := -1
-	for {
-		if COM_CheckHitable(uint8(bp06), uint8(bp04)) == 0 {
-			break
-		}
-		C_3C54()
-		if si = C_9683(); si != -1 {
+// monsterShoots flies missile from monster toward (dx, dy) across the battlefield, and
+// lets it hit the first party member in its way.
+func monsterShoots(missile uint8, monster, dx, dy int) {
+	hitTile = uint16(missile)
+	hitX, hitY = battlefield.monsterX[monster], battlefield.monsterY[monster]
+	sound(soundMissile)
+	member := -1
+	for advanceHit(uint8(dx), uint8(dy)) {
+		drawCombat()
+		if member = memberUnderHit(); member != -1 {
 			break
 		}
 	}
-	if si == -1 {
-		if hit_tile == TIL_4C {
-			*Combat_MAP(int(hit_y), int(hit_x)) = TIL_4C
+	if member == -1 {
+		if hitTile == tileLava {
+			*combatTile(int(hitY), int(hitX)) = tileLava // lava stays where it lands
 		}
-		hit_tile = 0
+		hitTile = 0
 		return
 	}
-	Gra_CR()
-	u4_puts(cstr(Party.chara[si]._name[:]))
-	u4_putc(' ')
-	switch hit_tile {
-	case TIL_44:
-		u4_puts( /*D_29D7*/ "Poisoned!\n")
-		C_9764(si)
-		if U4_RND1(1) != 0 || Party.chara[si]._stat != 'G' {
-			u4_puts( /*D_29E2*/ "Failed.\n")
+	newLine()
+	printText(cstr(party.members[member].name[:]))
+	printChar(' ')
+	status := &party.members[member].status
+	switch hitTile {
+	case tilePoisonField:
+		printText("Poisoned!\n")
+		flashMemberHit(member)
+		if randomBits(1) != 0 || *status != statusGood {
+			printText("Failed.\n")
 		} else {
-			Party.chara[si]._stat = 'P'
+			*status = statusPoisoned
 		}
-	case TIL_45:
-		u4_puts( /*D_29EB*/ "Electrified!\n")
-		C_96B9(si, bp08)
-	case TIL_46:
-		u4_puts( /*D_29F9*/ "Fiery Hit!\n")
-		C_96B9(si, bp08)
-	case TIL_47:
-		u4_puts( /*D_2A05*/ "Slept!\n")
-		C_9764(si)
-		if U4_RND1(1) != 0 || Party.chara[si]._stat != 'G' {
-			u4_puts( /*D_2A0D*/ "Failed.\n")
+	case tileEnergyField:
+		printText("Electrified!\n")
+		monsterHurts(member, monster)
+	case tileFireField:
+		printText("Fiery Hit!\n")
+		monsterHurts(member, monster)
+	case tileSleepField:
+		printText("Slept!\n")
+		flashMemberHit(member)
+		if randomBits(1) != 0 || *status != statusGood {
+			printText("Failed.\n")
 		} else {
-			Party.chara[si]._stat = 'S'
-			Fighters._chtile[si] = TIL_38
+			*status = statusAsleep
+			fighters.memberTile[member] = tileAsleep
 		}
-	case TIL_4C:
-		u4_puts( /*D_2A16*/ "Lava Hit!\n")
-		C_96B9(si, bp08)
-	case TIL_4E:
-		u4_puts( /*D_2A21*/ "Magical Hit!\n")
-		C_96B9(si, bp08)
+	case tileLava:
+		printText("Lava Hit!\n")
+		monsterHurts(member, monster)
+	case tileMagicSphere:
+		printText("Magical Hit!\n")
+		monsterHurts(member, monster)
 	default:
-		u4_puts( /*D_2A2F*/ "Hit!\n")
-		C_96B9(si, bp08)
+		printText("Hit!\n")
+		monsterHurts(member, monster)
 	}
-	hit_tile = 0
-	dspl_Stats()
+	hitTile = 0
+	showStats()
 }
 
-func C_98E4(bp08, bp06 uint8, bp04 int) bool {
-	bp_02 := aiCombatMap(int(bp06), int(bp08)) // read before the range check, as in the C
-	if C_29EF(bp_02) {
+// monsterCanMoveTo says whether monster i can move to (x, y) on the battlefield. Off the
+// field it can when weak enough to flee.
+func monsterCanMoveTo(x, y uint8, i int) bool {
+	tile := combatTileAt(int(y), int(x)) // read before the range check, as the original
+	if slowProgress(tile) {
 		return false
 	}
-	if bp08 >= 11 || bp06 >= 11 {
-		return Fighters._HP[bp04] < 24
+	if x >= viewSize || y >= viewSize {
+		return fighters.hp[i] < fleeingHP
 	}
-	if Fighters._x[bp04] == bp08 && Fighters._y[bp04] == bp06 && U4_RND1(3) != 0 {
-		return false
+	if fighters.x[i] == x && fighters.y[i] == y && randomBits(3) != 0 {
+		return false // rarely back where it came from
 	}
-
-	for bp_04 := 15; bp_04 >= 0; bp_04-- {
-		if Fighters._tile[bp_04] != 0 && Combat._npcX[bp_04] == bp08 && Combat._npcY[bp_04] == bp06 {
+	for j := len(fighters.tile) - 1; j >= 0; j-- {
+		if fighters.tile[j] != 0 && battlefield.monsterX[j] == x && battlefield.monsterY[j] == y {
 			return false
 		}
 	}
-	for bp_04 := 7; bp_04 >= 0; bp_04-- {
-		if Fighters._chtile[bp_04] != 0 && Combat._charaX[bp_04] == bp08 && Combat._charaY[bp_04] == bp06 {
+	for j := 7; j >= 0; j-- {
+		if fighters.memberTile[j] != 0 && battlefield.memberX[j] == x && battlefield.memberY[j] == y {
 			return false
 		}
 	}
-
-	if Fighters._tile[bp04] < 0x80 {
-		return C_2999(aiCombatMap(int(bp06), int(bp08)))
+	switch {
+	case fighters.tile[i] < tilePirateWest: // people
+		return isWalkable(tile)
+	case fighters.tile[i] < tileTwister: // sea monsters
+		return tile <= tileShallowWater
 	}
-	if Fighters._tile[bp04] < 0x8e {
-		return bp_02 < 3
+	switch fighters.baseTile[i] {
+	case tileInsects, tileTwister, tileBat, tileDaemon, tileDragon, tileBalron: // they fly
+		return tile <= tileShallowWater || isWalkable(tile)
+	case tileGhost, tileZorn: // through walls
+		return tile >= tileSwamp && tile != tileEnergyField
 	}
-	switch Fighters._gtile[bp04] {
-	case TIL_B4, TIL_8E, TIL_94, TIL_F0, TIL_F8, TIL_FC:
-		return bp_02 < 3 || C_2999(bp_02)
-	case TIL_9C, TIL_EC:
-		return bp_02 >= 3 && bp_02 != 0x45
-	default:
-		return C_2999(bp_02)
-	}
+	return isWalkable(tile)
 }
 
-func C_9A41(bp04 uint8) uint8 {
-	switch bp04 {
-	case TIL_20, TIL_5E, TIL_8A, TIL_E0, TIL_E4, TIL_F0:
-		return TIL_4E // magic sphere
-	case TIL_84, TIL_A4:
-		return TIL_4D // Missile
-	case TIL_86:
-		return TIL_45 // energy field
-	case TIL_88, TIL_F4, TIL_F8:
-		return TIL_4F // flash
-	case TIL_98, TIL_AC, TIL_CC:
-		return TIL_44 // poison field
-	case TIL_B8:
-		return TIL_47 // sleep field
-	case TIL_D0, TIL_D8:
-		return TIL_37 // rocks
-	case TIL_E8:
-		return TIL_4C // lava
-	case TIL_B0, TIL_FC:
-		return uint8(U4_RND1(3) + TIL_44) // [poison|energy|fire] field
-	default:
-		return 0
-	}
-}
+// fleeingHP: a monster weaker than this flees.
+const fleeingHP = 24
 
-/*C_9B03*/
-func CheckJinx(_x, _y uint8) bool {
-	if spell_sta == 'J' {
-		if bp_02 := COM_GetFighterId(_x, _y); bp_02 != -1 {
-			hit_tile = TIL_4F
-			hit_x = _x
-			hit_y = _y
-			C_3C54()
-			hit_tile = 0
-			sound(6)
-			COM_DoDamage(bp_02, -1, U4_RND1(0x3f))
-			C_3C54()
-			return true
-		}
-	}
-	return false
-}
-
-// steal food
-func C_9B6B() {
-	Party._food -= 2500
-	if Party._food < 0 {
-		Party._food = 0
-	}
-	dspl_Stats()
-	sound(8)
-}
-
-// steal gold
-func C_9BA6() {
-	if U4_RND1(3) == 0 {
-		si := U4_RND1(0x3f)
-		Party._gold = uint16(u4_max(int(Party._gold)-si, 0))
-		dspl_Stats()
-		sound(8)
-	}
-}
-
-// contact attack?
-func C_9BE5(bp06, bp04 int) int {
-	hit_x = Combat._charaX[bp04]
-	hit_y = Combat._charaY[bp04]
-	hit_tile = TIL_4D
-	C_3C54()
-	sound(5)
-	hit_tile = 0
-	if (spell_sta == 'P' && U4_RND1(1) != 0) || D_2460[Party.chara[bp04]._armor] >= u_rand_a() {
-		C_3C54()
-	} else if !C_96B9(bp04, bp06) {
-		return 1
+// monsterMissile is what monster kind shoots or casts, 0 if nothing.
+func monsterMissile(kind uint8) uint8 {
+	switch kind {
+	case tileMage, tileLordBritish, tileSeahorse, tileEvilMage, tileLiche, tileDaemon:
+		return tileMagicSphere
+	case tileNixie, tileTroll:
+		return tileMissile
+	case tileSquid:
+		return tileEnergyField
+	case tileSeaSerpent, tileHydra, tileDragon:
+		return tileHitFlash // fire breath
+	case tileSpider, tileMimic, tilePython:
+		return tilePoisonField
+	case tileGazer:
+		return tileSleepField
+	case tileEttin, tileCyclops:
+		return tileRocks
+	case tileLavaLizard:
+		return tileLava
+	case tileReaper, tileBalron:
+		return uint8(tilePoisonField + randomBits(3)) // any field
 	}
 	return 0
 }
 
-func C_9C56(bp04 int) {
-	Gra_CR()
-	u4_puts(C_1513(Fighters._tile[bp04]))
-	u4_puts( /*D_2A35*/ " Flees!\n")
-	if C_0AFE(Fighters._tile[bp04]) != 0 {
-		karma_inc(&Party._compa, 1)
-		karma_inc(&Party._justi, 1)
+// jinxStrikes: under Jinx a monster moving onto another hurts it instead; it reports
+// whether that happened.
+func jinxStrikes(x, y uint8) bool {
+	if activeSpell != effectJinx {
+		return false
 	}
-	sound(8)
-	Fighters._tile[bp04] = 0
-	Fighters._HP[bp04] = 0
+	other := monsterAt(x, y)
+	if other == -1 {
+		return false
+	}
+	hitTile = tileHitFlash
+	hitX, hitY = x, y
+	drawCombat()
+	hitTile = 0
+	sound(soundMonsterHit)
+	damageMonster(other, -1, randomBits(63))
+	drawCombat()
+	return true
 }
 
-// move enemies during fight: bp08: monster id, bp06: chara id
-func C_9CBC(bp08, bp06, bp04 int) {
-	var loc_B int
-	var loc_D, loc_E uint8
+func stealFood() {
+	party.food = max(party.food-2500, 0)
+	showStats()
+	sound(soundFailure)
+}
 
-	loc_A := isign(int(Combat._charaX[bp06]) - int(Combat._npcX[bp08]))
-	loc_C := isign(int(Combat._charaY[bp06]) - int(Combat._npcY[bp08]))
-	// Mimic
-	if Fighters._tile[bp08] == TIL_AC {
-		Fighters._gtile[bp08] = TIL_3C
-		if bp04 >= 5 {
-			goto C_9D51
-		}
-		Fighters._gtile[bp08] = TIL_AC
+func stealGold() {
+	if randomBits(3) == 0 {
+		party.gold = uint16(max(int(party.gold)-randomBits(63), 0))
+		showStats()
+		sound(soundFailure)
 	}
-	// attempt projectile
-	if U4_RND1(3) == 0 {
-		if bp_0c := C_9A41(Fighters._tile[bp08]); bp_0c != 0 {
-			if bp_0c != TIL_4E || spell_sta != 'N' {
-				C_978C(bp_0c, bp08, loc_A, loc_C)
-				t_callback()
-				return
-			}
-		}
-	}
-C_9D51:
-	// balron or reaper
-	if U4_RND1(3) == 0 {
-		if Fighters._tile[bp08] == TIL_FC || Fighters._tile[bp08] == TIL_B0 {
-			if spell_sta != 'N' {
-				t_callback()
-				Gra_09()
-				sound(9, 0x80)
-				Gra_09()
-				for loc_B = int(Party.f_1d8) - 1; loc_B >= 0; loc_B-- {
-					if Fighters._chtile[loc_B] != 0 && Party.chara[loc_B]._stat == 'G' && U4_RND1(1) != 0 {
-						Party.chara[loc_B]._stat = 'S'
-						Fighters._chtile[loc_B] = TIL_38
-					}
-				}
-				dspl_Stats()
-				return
-			}
-		}
-	}
-	// C_9DE5 (the C jumps into it from the other branches)
-	if Fighters._HP[bp08] < 24 {
-		loc_A = -loc_A
-		loc_C = -loc_C
-	} else if bp04 < 2 {
-		// contact?
-		switch Fighters._tile[bp08] {
-		case TIL_A8:
-			C_9B6B()
-		case TIL_C8:
-			C_9BA6()
-		}
-		C_9BE5(bp08, bp06) // contact attack?
+}
+
+// monsterStrikes lets monster strike member at close range, unless the member's armour (or
+// Protection, half the time) wards it off.
+func monsterStrikes(monster, member int) {
+	hitX, hitY = battlefield.memberX[member], battlefield.memberY[member]
+	hitTile = tileMissile
+	drawCombat()
+	sound(soundMonsterBlow)
+	hitTile = 0
+	if (activeSpell == effectProtection && randomBits(1) != 0) || armorDefense[party.members[member].armor] >= randomByte() {
+		drawCombat()
 		return
 	}
-	if Fighters._tile[bp08] == TIL_AC || Fighters._tile[bp08] == TIL_B0 {
-		return
+	monsterHurts(member, monster)
+}
+
+// monsterFlees takes monster off the battlefield; fleeing good creatures were spared, which
+// is compassionate and just.
+func monsterFlees(monster int) {
+	newLine()
+	printText(creatureName(fighters.tile[monster]))
+	printText(" Flees!\n")
+	if isGoodCreature(fighters.tile[monster]) {
+		raiseKarma(&party.karmaCompassion, 1)
+		raiseKarma(&party.karmaJustice, 1)
 	}
-	for loc_B = 2; loc_B > 0; loc_B-- {
-		if U4_RND1(1) != 0 && loc_A != 0 {
-			loc_D = uint8(int(Combat._npcX[bp08]) + loc_A)
-			loc_E = Combat._npcY[bp08]
-			if CheckJinx(loc_D, loc_E) {
-				return
-			}
-			if C_98E4(loc_D, loc_E, bp08) {
-				break
-			}
+	sound(soundFailure)
+	fighters.tile[monster] = 0
+	fighters.hp[monster] = 0
+}
+
+// monsterTurn is monster's turn against the nearest party member target, dist away: it may
+// shoot, put the party to sleep (balrons and reapers), steal, strike, flee or close in.
+func monsterTurn(monster, target, dist int) {
+	kind := fighters.tile[monster]
+	dirX := signInt(int(battlefield.memberX[target]) - int(battlefield.monsterX[monster]))
+	dirY := signInt(int(battlefield.memberY[target]) - int(battlefield.monsterY[monster]))
+	mayShoot := true
+	if kind == tileMimic { // a chest until the party comes near
+		fighters.baseTile[monster] = tileChest
+		if dist >= 5 {
+			mayShoot = false
+		} else {
+			fighters.baseTile[monster] = tileMimic
 		}
-		if loc_C != 0 {
-			loc_D = Combat._npcX[bp08]
-			loc_E = uint8(int(Combat._npcY[bp08]) + loc_C)
-			if CheckJinx(loc_D, loc_E) {
-				return
-			}
-			if C_98E4(loc_D, loc_E, bp08) {
-				break
-			}
-		}
-		if loc_A != 0 {
-			loc_D = uint8(int(Combat._npcX[bp08]) + loc_A)
-			loc_E = Combat._npcY[bp08]
-			if CheckJinx(loc_D, loc_E) {
-				return
-			}
-			if C_98E4(loc_D, loc_E, bp08) {
-				break
-			}
-		}
-		loc_A = isign(sc(u_rand_a()))
-		loc_C = isign(sc(u_rand_a()))
 	}
-	if loc_B != 0 {
-		Fighters._x[bp08] = Combat._npcX[bp08]
-		Fighters._y[bp08] = Combat._npcY[bp08]
-		Combat._npcX[bp08] = loc_D
-		Combat._npcY[bp08] = loc_E
-		if loc_D >= 11 || loc_E >= 11 {
-			C_9C56(bp08) // ... Flees
+	if mayShoot && randomBits(3) == 0 {
+		missile := monsterMissile(kind)
+		if missile != 0 && (missile != tileMagicSphere || activeSpell != effectNegate) {
+			monsterShoots(missile, monster, dirX, dirY)
+			redraw()
 			return
 		}
-		C_3C54()
+	}
+	if randomBits(3) == 0 && (kind == tileBalron || kind == tileReaper) && activeSpell != effectNegate {
+		redraw()
+		invertMap()
+		sound(soundSweep, 128)
+		invertMap()
+		for i := int(party.size) - 1; i >= 0; i-- {
+			if fighters.memberTile[i] != 0 && party.members[i].status == statusGood && randomBits(1) != 0 {
+				party.members[i].status = statusAsleep
+				fighters.memberTile[i] = tileAsleep
+			}
+		}
+		showStats()
 		return
 	}
-	if bp04 < 2 {
-		C_9BE5(bp08, bp06) // contact attack?
+	if fighters.hp[monster] < fleeingHP {
+		dirX, dirY = -dirX, -dirY
+	} else if dist < 2 {
+		switch kind {
+		case tileGremlin:
+			stealFood()
+		case tileRogue:
+			stealGold()
+		}
+		monsterStrikes(monster, target)
+		return
+	}
+	if kind == tileMimic || kind == tileReaper {
+		return // they don't move
+	}
+
+	// Close in (or flee): across or along, then twice at random.
+	var toX, toY uint8
+	moved, jinxed := false, false
+	tryMove := func(x, y uint8) bool {
+		toX, toY = x, y
+		if jinxStrikes(x, y) {
+			jinxed = true
+			return true
+		}
+		moved = monsterCanMoveTo(x, y, monster)
+		return moved
+	}
+	for range 2 {
+		x, y := battlefield.monsterX[monster], battlefield.monsterY[monster]
+		if randomBits(1) != 0 && dirX != 0 && tryMove(x+uint8(dirX), y) ||
+			dirY != 0 && tryMove(x, y+uint8(dirY)) ||
+			dirX != 0 && tryMove(x+uint8(dirX), y) {
+			break
+		}
+		dirX = randomSign()
+		dirY = randomSign()
+	}
+	if jinxed {
+		return
+	}
+	if moved {
+		fighters.x[monster], fighters.y[monster] = battlefield.monsterX[monster], battlefield.monsterY[monster]
+		battlefield.monsterX[monster], battlefield.monsterY[monster] = toX, toY
+		if toX >= viewSize || toY >= viewSize {
+			monsterFlees(monster)
+			return
+		}
+		drawCombat()
+		return
+	}
+	if dist < 2 {
+		monsterStrikes(monster, target)
 	}
 }
 
-// combat ai
-func C_9F7B() {
-	t_callback()
-
-	for loc_A := 15; loc_A >= 0; loc_A-- {
-		if Fighters._tile[loc_A] != 0 {
-			if Fighters._sleeping[loc_A] == 0 || U4_RND1(7) == 0 {
-				Fighters._sleeping[loc_A] = 0
-				if Fighters._tile[loc_A] == TIL_EC {
-					spell_sta = 'N'
-					spell_cnt = 2
-					dspl_Stats()
-				} else if Fighters._tile[loc_A] == TIL_DC && U4_RND1(7) == 0 {
-					var loc_D, loc_E uint8
-					for {
-						loc_D = uint8(U4_RND3(11))
-						loc_E = uint8(U4_RND3(11))
-						if C_98E4(loc_D, loc_E, loc_A) {
-							break
-						}
-					}
-					Combat._npcX[loc_A] = loc_D
-					Combat._npcY[loc_A] = loc_E
-				}
-				loc_D := Combat._npcX[loc_A]
-				loc_E := Combat._npcY[loc_A]
-				loc_F := 99
-				loc_C := -1
-				for loc_B := int(Party.f_1d8) - 1; loc_B >= 0; loc_B-- {
-					if isCharaAlive(loc_B) && Fighters._chtile[loc_B] != 0 {
-						si := u4_abs(int(Combat._charaX[loc_B])-int(loc_D)) +
-							u4_abs(int(Combat._charaY[loc_B])-int(loc_E))
-						if loc_F > si {
-							loc_F = si
-							loc_C = loc_B
-						}
+// monstersTurn gives each monster on the battlefield its turn (sleepers wake one time in
+// eight) against the nearest party member, then lets the fields hurt them.
+func monstersTurn() {
+	redraw()
+	for m := len(fighters.tile) - 1; m >= 0; m-- {
+		kind := fighters.tile[m]
+		if kind == 0 {
+			continue
+		}
+		if fighters.sleeping[m] == 0 || randomBits(7) == 0 {
+			fighters.sleeping[m] = 0
+			if kind == tileZorn { // a zorn negates magic
+				activeSpell = effectNegate
+				spellTurns = 2
+				showStats()
+			} else if kind == tileWisp && randomBits(7) == 0 { // a wisp teleports
+				var x, y uint8
+				for {
+					x = uint8(randomBelow(viewSize))
+					y = uint8(randomBelow(viewSize))
+					if monsterCanMoveTo(x, y, m) {
+						break
 					}
 				}
-				if loc_C != -1 {
-					C_9CBC(loc_A, loc_C, loc_F)
+				battlefield.monsterX[m], battlefield.monsterY[m] = x, y
+			}
+			x, y := battlefield.monsterX[m], battlefield.monsterY[m]
+			nearest, target := 99, -1
+			for i := int(party.size) - 1; i >= 0; i-- {
+				if isAlive(i) && fighters.memberTile[i] != 0 {
+					d := abs(int(battlefield.memberX[i])-int(x)) + abs(int(battlefield.memberY[i])-int(y))
+					if d < nearest {
+						nearest, target = d, i
+					}
 				}
 			}
-			switch aiCombatMap(int(Combat._npcY[loc_A]), int(Combat._npcX[loc_A])) {
-			case TIL_46, TIL_4C:
-				if Fighters._tile[loc_A] == TIL_E8 || Fighters._tile[loc_A] >= TIL_F0 {
-					break
-				}
-				fallthrough
-			case TIL_44:
-				sound(6)
-				COM_DoDamage(loc_A, -1, U4_RND1(0x7f))
-			case TIL_47:
-				if C_636D(int(Fighters._tile[loc_A])) == 0 && Fighters._HP[loc_A] >= u_rand_a() {
-					Fighters._sleeping[loc_A] = 1
-					sound(6)
-				}
+			if target != -1 {
+				monsterTurn(m, target, nearest)
+			}
+		}
+		switch combatTileAt(int(battlefield.monsterY[m]), int(battlefield.monsterX[m])) {
+		case tileFireField, tileLava:
+			if fighters.tile[m] == tileLavaLizard || fighters.tile[m] >= tileDaemon {
+				break // immune to fire
+			}
+			fallthrough
+		case tilePoisonField:
+			sound(soundMonsterHit)
+			damageMonster(m, -1, randomBits(127))
+		case tileSleepField:
+			if !isUndead(fighters.tile[m]) && fighters.hp[m] >= randomByte() {
+				fighters.sleeping[m] = 1
+				sound(soundMonsterHit)
 			}
 		}
 	}
-	MP_recover()
-	Party._moves++
-	if spell_cnt != 0 {
-		spell_cnt--
-		if spell_cnt == 0 {
-			spell_sta = 7
+	regainMP()
+	party.moves++
+	if spellTurns != 0 {
+		spellTurns--
+		if spellTurns == 0 {
+			activeSpell = effectNone
 		}
 	}
 }

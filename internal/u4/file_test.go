@@ -10,7 +10,7 @@ import (
 
 // Records decode and re-encode any file image byte for byte.
 func TestRecordRoundTrip(t *testing.T) {
-	for _, r := range []gamefs.Record{&tParty{}, &tNPC{}, &t_500{}, &tCombat{}} {
+	for _, r := range []gamefs.Record{&partyRecord{}, &peopleTable{}, &areaRecord{}, &battlefieldRecord{}} {
 		img := make([]byte, len(gamefs.Encode(r)))
 		rand.Read(img)
 		if err := gamefs.Decode(r, img); err != nil {

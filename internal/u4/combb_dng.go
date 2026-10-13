@@ -1,431 +1,433 @@
 package u4
 
-// Ports of U4_COMBB.C (unsigned char: whirlpools, twisters, moving in combat) and
-// U4_DNG.C (the dungeon command loop).
+// Whirlpools and twisters, moving on the battlefield, and the dungeon's command loop.
 
-// ---- U4_COMBB.C: Whirlpool and Twister management ----
+// ---- Whirlpools and twisters ----
 
-// remove monster?
-func C_7821(si, bp04 int) {
-	n := &D_8742._npc
-	for di := 31; di >= 0; di-- {
-		if di != si && n._tile[di] != 0 && n._x[di] == n._x[si] && n._y[di] == n._y[si] {
-			n._gtile[di] = 0
-			n._tile[di] = 0
-			t_callback()
-			sound(bp04)
+// clearOthersAt removes the other people where person i is (a whirlpool or twister swallows
+// them), with noise.
+func clearOthersAt(i, effectID int) {
+	people := &area.people
+	for j := len(people.tile) - 1; j >= 0; j-- {
+		if j != i && people.tile[j] != 0 && people.x[j] == people.x[i] && people.y[j] == people.y[i] {
+			people.baseTile[j] = 0
+			people.tile[j] = 0
+			redraw()
+			sound(effectID)
 		}
 	}
 }
 
-// whirlpool contact?
-func C_786F(si int) {
-	if Party._x == D_8742._npc._x[si] && Party._y == D_8742._npc._y[si] {
-		t_callback()
-		hit_x = 5
-		hit_y = 5
-		hit_tile = TIL_8C
-		C_36C7()
-		Party._x = 0x7f
-		Party._y = 0x4e
-		sound(11)
-		C_1584()
-		Party._tile = TIL_10
-		hit_tile = 0
-		C_26B6()
+// Where a whirlpool casts the party's ship: Lock Lake.
+const whirlpoolDestX, whirlpoolDestY = 127, 78
+
+// whirlpoolStrikes lets whirlpool i swallow the party (hurt, and cast into Lock Lake) and
+// whatever else is there.
+func whirlpoolStrikes(i int) {
+	if party.x == area.people.x[i] && party.y == area.people.y[i] {
+		redraw()
+		hitX, hitY = viewCenter, viewCenter
+		hitTile = tileWhirlpool
+		drawView()
+		party.x, party.y = whirlpoolDestX, whirlpoolDestY
+		sound(soundRising)
+		damageParty()
+		party.tile = tileShipWest
+		hitTile = 0
+		centerMap()
 	}
-	C_7821(si, 11)
+	clearOthersAt(i, soundRising)
 }
 
-// twister contact?
-func C_78D1(si int) {
-	if Party._x == D_8742._npc._x[si] && Party._y == D_8742._npc._y[si] {
-		t_callback()
-		sound(12)
-		C_1584()
-		C_1584()
-		C_1584()
-		C_1584()
-		hit_tile = 0
+// twisterStrikes lets twister i hurt the party four times, and swallow whatever else is
+// there.
+func twisterStrikes(i int) {
+	if party.x == area.people.x[i] && party.y == area.people.y[i] {
+		redraw()
+		sound(soundFalling)
+		for range 4 {
+			damageParty()
+		}
+		hitTile = 0
 	}
-	C_7821(si, 12)
+	clearOthersAt(i, soundFalling)
 }
 
-func C_7918() {
-	if CurMode != MOD_OUTDOORS {
+// whirlpoolsAndTwisters lets the world's whirlpools and twisters (among the first four
+// monsters) strike.
+func whirlpoolsAndTwisters() {
+	if gameMode != modeOutdoors {
 		return
 	}
-	for si := 3; si >= 0; si-- {
-		if D_8742._npc._tile[si] == TIL_8C {
-			C_786F(si)
-		} else if D_8742._npc._tile[si] == TIL_8E {
-			C_78D1(si)
+	for i := 3; i >= 0; i-- {
+		switch area.people.tile[i] {
+		case tileWhirlpool:
+			whirlpoolStrikes(i)
+		case tileTwister:
+			twisterStrikes(i)
 		}
 	}
 }
 
-func w_SameExit() { /*C_794D*/
-	u4_puts("All must use same exit!\n")
-	sound(1)
+// ---- Moving on the battlefield ----
+
+func saySameExit() {
+	printText("All must use same exit!\n")
+	sound(soundBeep)
 }
 
-// exit combat zone
-func C_7962() {
-	a := int(activeChara)
-	Combat._charaX[a] = 0x80
-	Combat._charaY[a] = 0x80
-	Fighters._chtile[a] = 0
-	sound(8)
-	if CurMode == MOD_COMBAT && C_0AFE(D_96F8) == 0 && Party.chara[a]._HP[0] == Party.chara[a]._HP[1] {
-		karma_dec(&Party._valor, 2)
-		karma_dec(&Party._sacri, 2)
+// offField is the position of a member who left the battlefield.
+const offField = 128
+
+// memberLeavesField takes the active member off the battlefield. Fleeing a fight against
+// evil unhurt is cowardly: valor and sacrifice suffer.
+func memberLeavesField() {
+	a := int(activeMember)
+	battlefield.memberX[a], battlefield.memberY[a] = offField, offField
+	fighters.memberTile[a] = 0
+	sound(soundFailure)
+	member := &party.members[a]
+	if gameMode == modeCombat && !isGoodCreature(encounterTile) && member.hp == member.maxHP {
+		lowerKarma(&party.karmaValor, 2)
+		lowerKarma(&party.karmaSacrifice, 2)
 	}
 }
 
-// exiting fight
-func C_79C9(bp06, bp04 uint8) {
-	if CurMode == MOD_COM_ROOM {
-		// someone already exited W/E
-		if D_96EE != 0 {
-			if bp06 != D_96EE {
-				w_SameExit()
+// memberExits lets the active member leave the battlefield at (x, y), past its edge. In a
+// dungeon room all must leave by the same side, the one the first took.
+func memberExits(x, y uint8) {
+	if gameMode == modeCombatRoom {
+		switch {
+		case fleeDirX != 0: // someone left west or east
+			if x != fleeDirX {
+				saySameExit()
 				return
 			}
-			C_7962()
-			return
-		}
-		// someone already exited N/S
-		if D_96F4 != 0 {
-			if bp04 != D_96F4 {
-				w_SameExit()
+		case fleeDirY != 0: // someone left north or south
+			if y != fleeDirY {
+				saySameExit()
 				return
 			}
-			C_7962()
-			return
-		}
-		if bp06 > 10 {
-			D_96EE = bp06
-		} else {
-			D_96F4 = bp04
+		case x >= viewSize:
+			fleeDirX = x
+		default:
+			fleeDirY = y
 		}
 	}
-	C_7962()
+	memberLeavesField()
 }
 
-func u16at(b []uint8, i int) uint16 { return uint16(b[i]) | uint16(b[i+1])<<8 }
-
-// room special tiles
-func C_7A15(bp06, bp04 uint8) {
-	for a := 3; a >= 0; a-- {
-		o := a << 2
-		if D_95B2[o] == 0 {
+// springTriggers springs a dungeon room's triggers at (x, y): each of the four is the tile
+// it sets, the position stepping on which springs it, and the two positions it sets the
+// tile at (0,0: none), every coordinate four bits.
+func springTriggers(x, y uint8) {
+	for t := 3; t >= 0; t-- {
+		trigger := roomTriggers[t*4 : t*4+4]
+		tile, at := trigger[0], trigger[1]
+		if tile == 0 || at/16 != x || at%16 != y {
 			continue
 		}
-		w0 := u16at(D_95B2[:], o)
-		if uint16(bp06)<<12 == w0&0xf000 && uint16(bp04)<<8 == w0&0x0f00 {
-			w1 := u16at(D_95B2[:], o+2)
-			b := int(w1 & 0xf)
-			c := int(w1>>4) & 0xf
-			if b|c != 0 {
-				*Combat_MAP(b, c) = D_95B2[o]
-			}
-			b = int(w1>>8) & 0xf
-			c = int(w1>>12) & 0xf
-			if b|c != 0 {
-				*Combat_MAP(b, c) = D_95B2[o]
+		for _, target := range trigger[2:] {
+			ty, tx := int(target%16), int(target/16)
+			if ty != 0 || tx != 0 {
+				*combatTile(ty, tx) = tile
 			}
 		}
 	}
 }
 
-// move [fight]
-func C_7AE3(si int, bp06, bp04 uint8) {
-	sound(0)
-	// out of bounds => exiting
-	if bp06 > 10 || bp04 > 10 {
-		C_79C9(bp06, bp04)
+// moveMember moves party member i to (x, y) on the battlefield, or off it.
+func moveMember(i int, x, y uint8) {
+	sound(soundStep)
+	if x >= viewSize || y >= viewSize {
+		memberExits(x, y)
 		return
 	}
-	di := D_96F9[int(bp04)*11+int(bp06)]
-	if !C_2999(di) {
-		w_Blocked()
+	tile := viewTiles[int(y)*viewSize+int(x)]
+	if !isWalkable(tile) {
+		sayBlocked()
 		return
 	}
-	if C_29EF(di) {
-		w_SlowProgress()
+	if slowProgress(tile) {
+		saySlowProgress()
 		return
 	}
-	Combat._charaX[si] = bp06
-	Combat._charaY[si] = bp04
-	sound(0)
-	if CurMode == MOD_COM_ROOM {
-		C_7A15(bp06, bp04)
+	battlefield.memberX[i], battlefield.memberY[i] = x, y
+	sound(soundStep)
+	if gameMode == modeCombatRoom {
+		springTriggers(x, y)
 	}
 }
 
-func C_7B89() { // North [combat]
-	a := int(activeChara)
-	C_7AE3(a, Combat._charaX[a], Combat._charaY[a]-1)
+func cmdNorthInCombat() { // North [combat]
+	a := int(activeMember)
+	moveMember(a, battlefield.memberX[a], battlefield.memberY[a]-1)
 }
 
-func C_7BAF() { // South [combat]
-	a := int(activeChara)
-	C_7AE3(a, Combat._charaX[a], Combat._charaY[a]+1)
+func cmdSouthInCombat() { // South [combat]
+	a := int(activeMember)
+	moveMember(a, battlefield.memberX[a], battlefield.memberY[a]+1)
 }
 
-func C_7BD5() { // East [combat]
-	a := int(activeChara)
-	C_7AE3(a, Combat._charaX[a]+1, Combat._charaY[a])
+func cmdEastInCombat() { // East [combat]
+	a := int(activeMember)
+	moveMember(a, battlefield.memberX[a]+1, battlefield.memberY[a])
 }
 
-func C_7BFD() { // West [combat]
-	a := int(activeChara)
-	C_7AE3(a, Combat._charaX[a]-1, Combat._charaY[a])
+func cmdWestInCombat() { // West [combat]
+	a := int(activeMember)
+	moveMember(a, battlefield.memberX[a]-1, battlefield.memberY[a])
 }
 
-// ---- U4_DNG.C ----
+// ---- The dungeon ----
 
-func DNG_main() { /*C_84D2*/
-	var si int
-	D_9446 = 1
-	u_kbflush()
-	bp_04 := 0
+// dungeonLoop runs the party's commands in a dungeon until it climbs out above the first
+// level.
+func dungeonLoop() {
+	var key, lastKey int
+	forceRender = 1
+	flushKeys()
 	for {
-		C_9209()
-		u4_putc(0x10)
-		t_callback()
-		if C_10FD() {
+		groundEvent()
+		printChar(promptChar)
+		redraw()
+		if checkPartyAlive() {
 			ask(pCmd)
-			u_delay(25, 1)
-			if u_kbhit() != 0 {
-				si = u_kbread()
-			} else {
-				si = KBD_SPACE
+			const commandSeconds = 25 // waiting this long passes
+			waitSeconds(commandSeconds, true)
+			key = keySpace
+			if keyWaiting() {
+				key = readKey()
 			}
-			if u4_isupper(si & 0xff) {
-				si = si&0xff00 | u4_lower(si&0xff)
-			}
-			switch si {
-			case KBD_SPACE:
-				w_Pass()
-			case KBD_UP, 0x487e:
-				C_891E()
-			case KBD_LEFT, 0x4b7c:
-				C_899F()
-			case KBD_DOWN, 0x5060:
-				C_895F()
-			case KBD_RIGHT, 0xf400:
-				C_89BD()
-			case KBD_C:
-				CMD_Cast()
-			case KBD_D:
-				C_8A1F() // (D)escend [dungeon]
-			case KBD_G:
-				CMD_Get()
-			case KBD_H:
-				CMD_HoleUp()
-			case KBD_I:
-				CMD_Ignite()
-			case KBD_K:
-				C_89DB() // (K)limb [dungeon]
-			case KBD_M:
-				CMD_Mix()
-			case KBD_N:
-				CMD_NewOrder()
-			case KBD_P:
-				CMD_Peer()
-			case KBD_Q:
-				CMD_Quit()
-			case KBD_R:
-				CMD_Ready()
-			case KBD_S:
-				C_B9B2() // (S)earch [dungeon]
-			case KBD_U:
-				CMD_Use()
-			case KBD_V:
-				CMD_Volume()
-			case KBD_W:
-				CMD_Wear()
-			case KBD_Z:
-				CMD_Ztats()
-			case KBD_A, KBD_B, KBD_E, KBD_F, KBD_J, KBD_L, KBD_O, KBD_T, KBD_X, KBD_Y:
-				w_NotHere()
-				sound(2)
-			case KBD_CTRL_S:
-				if bp_04 == KBD_ALT_Z {
-					C_1C21()
+			key = lowerKey(key)
+			switch key {
+			case keySpace:
+				sayPass()
+			case keyUp, keyUpAlt:
+				cmdAdvance()
+			case keyLeft, keyLeftAlt:
+				cmdTurnLeft()
+			case keyDown, keyDownAlt:
+				cmdRetreat()
+			case keyRight, keyRightAlt:
+				cmdTurnRight()
+			case keyC:
+				cmdCast()
+			case keyD:
+				cmdDescendDungeon()
+			case keyG:
+				cmdGet()
+			case keyH:
+				cmdHoleUp()
+			case keyI:
+				cmdIgnite()
+			case keyK:
+				cmdKlimbDungeon()
+			case keyM:
+				cmdMix()
+			case keyN:
+				cmdNewOrder()
+			case keyP:
+				cmdPeer()
+			case keyQ:
+				cmdQuit()
+			case keyR:
+				cmdReady()
+			case keyS:
+				cmdSearchDungeon() // search
+			case keyU:
+				cmdUse()
+			case keyV:
+				cmdVolume()
+			case keyW:
+				cmdWear()
+			case keyZ:
+				cmdZtats()
+			case keyA, keyB, keyE, keyF, keyJ, keyL, keyO, keyT, keyX, keyY:
+				sayNotHere()
+				sound(soundBadCommand)
+			case keyCtrlS:
+				if lastKey == keyAltZ {
+					showKarmas()
 					break
 				}
 				fallthrough
 			default:
-				u4_puts("Bad command\n")
-				sound(2)
-				D_07F8 = 0
+				printText("Bad command\n")
+				sound(soundBadCommand)
+				turnPasses = false
 			}
-			C_AE41()
+			lookAround()
 		} else {
-			u4_puts("Zzzzz\n")
+			printText("Zzzzz\n")
 		}
-		if D_07F8 != 0 && Party._z >= 0 {
-			C_87E2()
+		if turnPasses && party.z >= 0 {
+			endDungeonTurn()
 		} else {
-			D_07F8 = 1
+			turnPasses = true
 		}
-		bp_04 = si
-		if Party._z < 0 {
+		lastKey = key
+		if party.z < 0 {
 			break
 		}
 	}
-	C_2747()
-	File_DNG = nil
+	leaveTown()
+	dungeonFile = nil
 }
 
-func C_8743() bool {
-	t := tile_cur
-	if t&0x0f == 0 || t&0xf0 == 0x80 || t&0xf0 == 0x90 || t&0xf0 == 0xA0 || t&0xf0 == 0xD0 || t&0xf0 == 0xF0 {
+// dungeonEncounter starts a fight when a monster is in the party's room, taking it off the
+// level; it reports whether it did.
+func dungeonEncounter() bool {
+	room := hereTile
+	switch dngKind(room) {
+	case dngTrap, dngFountain, dngField, dngRoom, dngWall:
 		return false
 	}
-	D_9452 = TIL_90 + (t&0x0f)*4 - 4
-	D_96F8 = D_9452
-	*D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)) &= 0xf0
-	n := &D_8742._npc
-	for si := 0x1f; si >= 0; si-- {
-		if int16(n._var[si]) == Party._z && n._x[si] == Party._x && n._y[si] == Party._y {
-			n._var[si] = 0
-			n._tile[si] = 0
-			n._x[si] = 0
-			n._y[si] = 0
+	if dngDetail(room) == 0 {
+		return false
+	}
+	foeTile = tileRat + (dngDetail(room)-1)*4
+	encounterTile = foeTile
+	here := area.dungeonRoom(int(party.z), int(party.y), int(party.x))
+	*here = dngKind(*here)
+	people := &area.people
+	for i := len(people.tile) - 1; i >= 0; i-- {
+		if int16(people.behaviour[i]) == party.z && people.x[i] == party.x && people.y[i] == party.y {
+			people.behaviour[i] = 0
+			people.tile[i] = 0
+			people.x[i] = 0
+			people.y[i] = 0
 			break
 		}
 	}
-	C_7D50()
+	startDungeonFight()
 	return true
 }
 
-func C_87E2() {
-	C_10FD()
-	for si := 0; si < int(Party.f_1d8); si++ {
-		di := &Party.chara[si]
-		if di._stat == 'S' && U4_RND1(7) == 0 {
-			di._stat = 'G'
-		} else if di._stat == 'P' {
-			hitChara(si, 2)
-			Gra_11(si)
-			sound(6)
-			Gra_11(si)
+// endDungeonTurn ends a turn in the dungeon: sleepers may wake, poison and hunger hurt, the
+// monsters move, the light burns down, and a monster or room ahead starts a fight.
+func endDungeonTurn() {
+	checkPartyAlive()
+	for i := 0; i < int(party.size); i++ {
+		member := &party.members[i]
+		if member.status == statusAsleep && randomBits(7) == 0 {
+			member.status = statusGood
+		} else if member.status == statusPoisoned {
+			damageMember(i, 2)
+			invertStatusLine(i)
+			sound(soundMonsterHit)
+			invertStatusLine(i)
 		}
 	}
-	if food_dec(int(Party.f_1d8)) {
-		u4_puts("\nStarving!!!\n")
-		for si := 0; si < int(Party.f_1d8); si++ {
-			if isCharaAlive(si) {
-				hitChara(si, 2)
+	if eatFood(int(party.size)) {
+		printText("\nStarving!!!\n")
+		for i := 0; i < int(party.size); i++ {
+			if isAlive(i) {
+				damageMember(i, 2)
 			}
 		}
-		for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-			Gra_11(si)
+		for i := int(party.size) - 1; i >= 0; i-- {
+			invertStatusLine(i)
 		}
-		sound(6)
-		for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-			Gra_11(si)
-		}
-	}
-	MP_recover()
-	C_9414()
-	C_95AA()
-	if Party.f_1dc != 0 {
-		Party.f_1dc--
-	}
-	Party._moves++
-	if spell_cnt != 0 {
-		spell_cnt--
-		if spell_cnt == 0 {
-			spell_sta = 7
+		sound(soundMonsterHit)
+		for i := int(party.size) - 1; i >= 0; i-- {
+			invertStatusLine(i)
 		}
 	}
-	if Party.f_1dc == 0 {
-		u4_puts("It's Dark!\n")
+	regainMP()
+	moveDungeonMonsters()
+	spawnDungeonMonsters()
+	if party.flyingOrLight != 0 {
+		party.flyingOrLight-- // the light burns down
 	}
-	dspl_Stats()
-	if !C_8743() {
-		for tile_cur&0xf0 == 0xd0 {
-			C_10FD() // check death
-			C_7FFD() // enter dungeon room
-			C_B677() // render 3d
+	party.moves++
+	if spellTurns != 0 {
+		spellTurns--
+		if spellTurns == 0 {
+			activeSpell = effectNone
+		}
+	}
+	if party.flyingOrLight == 0 {
+		printText("It's Dark!\n")
+	}
+	showStats()
+	if !dungeonEncounter() {
+		for dngKind(hereTile) == dngRoom {
+			checkPartyAlive()
+			fightRoom()     // the room's fight
+			renderDungeon() // render the view
 		}
 	}
 }
 
-func C_88E8(bp06 uint8, bp04 int) bool {
-	if bp04 == 0 {
-		if bp06&0xf0 == 0xc0 || bp06&0xf0 == 0xe0 || bp06&0xf0 == 0xd0 {
+// canPass says whether the party can move into a room holding contents: anything below a
+// door but an energy field, and going forward also doors and battle rooms.
+func canPass(contents uint8, forward bool) bool {
+	switch dngKind(contents) {
+	case dngDoor, dngSecretDoor, dngRoom:
+		if forward {
 			return true
 		}
 	}
-	return bp06 != 0xa1 && bp06 < 0xc0
+	const energyField = dngField + 1
+	return contents != energyField && contents < dngDoor
 }
 
-// Advance
-func C_891E() {
-	u4_puts("Advance\n")
-	if !C_88E8(tile_forward, 0) {
-		w_Blocked()
+func cmdAdvance() {
+	printText("Advance\n")
+	if !canPass(aheadTile, true) {
+		sayBlocked()
 		return
 	}
-	Party._x = uint8(DNG_X_p(int(Party._x), int(Party._dir)))
-	Party._y = uint8(DNG_Y_p(int(Party._y), int(Party._dir)))
+	party.x = uint8(aheadX(int(party.x), int(party.dir)))
+	party.y = uint8(aheadY(int(party.y), int(party.dir)))
 }
 
-// Retreat
-func C_895F() {
-	u4_puts("Retreat\n")
-	if !C_88E8(tile_back, 1) {
-		w_Blocked()
+func cmdRetreat() {
+	printText("Retreat\n")
+	if !canPass(behindTile, false) {
+		sayBlocked()
 		return
 	}
-	Party._x = uint8(DNG_X_m(int(Party._x), int(Party._dir)))
-	Party._y = uint8(DNG_Y_m(int(Party._y), int(Party._dir)))
+	party.x = uint8(behindX(int(party.x), int(party.dir)))
+	party.y = uint8(behindY(int(party.y), int(party.dir)))
 }
 
-// Turn Left
-func C_899F() {
-	u4_puts("Turn Left\n")
-	Party._dir = (Party._dir - 1) & 3
-	D_07F8 = 0
+func cmdTurnLeft() {
+	printText("Turn Left\n")
+	party.dir = (party.dir + 3) % 4
+	turnPasses = false
 }
 
-// Turn Right
-func C_89BD() {
-	u4_puts("Turn Right\n")
-	Party._dir = (Party._dir + 1) & 3
-	D_07F8 = 0
+func cmdTurnRight() {
+	printText("Turn Right\n")
+	party.dir = (party.dir + 1) % 4
+	turnPasses = false
 }
 
-// (K)limb [dungeon]
-func C_89DB() {
-	u4_puts("Klimb ")
-	if tile_cur&0xf0 == 0x10 || tile_cur&0xf0 == 0x30 {
-		u4_puts("up!\n")
-		Party._z--
-		if Party._z >= 0 {
-			u4_puts("To level ")
-			u4_putc(int(Party._z) + '1')
-			Gra_CR()
-		}
-	} else {
-		w_What()
+func cmdKlimbDungeon() {
+	printText("Klimb ")
+	if kind := dngKind(hereTile); kind != dngLadderUp && kind != dngLadderUpDown {
+		sayWhat()
+		return
+	}
+	printText("up!\n")
+	party.z--
+	if party.z >= 0 {
+		printText("To level ")
+		printChar(int(party.z) + '1')
+		newLine()
 	}
 }
 
-// (D)escend [dungeon]
-func C_8A1F() {
-	u4_puts("Descend ")
-	if tile_cur&0xf0 == 0x20 || tile_cur&0xf0 == 0x30 {
-		Party._z++
-		u4_puts("down to level ")
-		u4_putc(int(Party._z) + '1')
-		Gra_CR()
-	} else {
-		w_What()
+func cmdDescendDungeon() {
+	printText("Descend ")
+	if kind := dngKind(hereTile); kind != dngLadderDown && kind != dngLadderUpDown {
+		sayWhat()
+		return
 	}
+	party.z++
+	printText("down to level ")
+	printChar(int(party.z) + '1')
+	newLine()
 }

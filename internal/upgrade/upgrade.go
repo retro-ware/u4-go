@@ -5,7 +5,7 @@
 //
 // Formats: shapes.vga is 256 tiles of 16x16 and charset.vga 128 glyphs of 8x8, one byte a
 // pixel; u4vga.pal is 256 6-bit VGA DAC triples; the pictures (*.old, rune_6..8.ega) are the
-// game's RLE (byte 02h, count, value; else a literal) over 320x200 bytes, one a pixel. The
+// game's RLE (the byte 2, a count, a value; else a literal) over 320x200 bytes, one a pixel. The
 // .old names are those the patch's switch.bat swaps in.
 package upgrade
 

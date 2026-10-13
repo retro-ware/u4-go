@@ -1,1565 +1,1387 @@
 package u4
 
-// Port of U4_SHOPS.C (signed char): the shops (Hawkwind, reagents, weapons, armor, horses, guild,
-// inn, healer, pub, food).
+// The shops: Hawkwind the seer, the reagent, weapon and armour shops, the horses, the
+// guilds, the inns, the healers, the pubs and the food shops.
 
-var D_3F0C = [5][8]string{
+import (
+	"slices"
+	"strings"
+)
+
+// shopFront is a shop's town, name and keeper.
+type shopFront struct {
+	loc    uint16
+	name   string
+	keeper string
+}
+
+func (s shopFront) town() uint16 { return s.loc }
+
+// findShop is the index of the shop of the party's town among shops.
+func findShop[S interface{ town() uint16 }](shops []S) int {
+	for i, s := range shops {
+		if s.town() == party.loc {
+			return i
+		}
+	}
+	panic("no shop of this kind in this town")
+}
+
+// The most of anything the party can carry.
+const (
+	maxStock = 99
+	maxFood  = 999900 // 9999 rations, in hundredths
+	ration   = 100
+)
+
+// leaderName is the party leader's name.
+func leaderName() string { return cstr(party.members[0].name[:]) }
+
+// askAmount reads an amount of up to digits digits; -1 when nothing was typed.
+func askAmount(digits int) int { return int(askNumber(digits)) }
+
+// ---- Hawkwind the seer ----
+
+// hawkwindInsights are the seer's words on each virtue, by how far along its path the
+// party is: karma below 20, 40, 60 and 99, and 99.
+var hawkwindInsights = [5][8]string{
 	{ /* < 20*/
-		/*D_316E*/ "Thou art a thief and a scoundrel. Thou may not ever become an Avatar!",
-		/*D_31B4*/ "Thou art a cold and cruel brute.  Thou shouldst go to prison for thy crimes!",
-		/*D_3201*/ "Thou art a coward, thou dost flee from the hint of danger!",
-		/*D_323C*/ "Thou art an unjust wretch. Thou are a fulsome meddler!",
-		/*D_3273*/ "Thou art a self-serving Tufthunter. Thou deservest not my help, yet I grant it!",
-		/*D_32C3*/ "Thou art a cad and a bounder. Thy presence is an affront. Thou art low as a slug!",
-		/*D_3315*/ "Thy spirit is weak and feeble. Thou dost not strive for Perfection!",
-		/*D_3359*/ "Thou art proud and vain. All other virtue in thee is a loss!",
+		"Thou art a thief and a scoundrel. Thou may not ever become an Avatar!",
+		"Thou art a cold and cruel brute.  Thou shouldst go to prison for thy crimes!",
+		"Thou art a coward, thou dost flee from the hint of danger!",
+		"Thou art an unjust wretch. Thou are a fulsome meddler!",
+		"Thou art a self-serving Tufthunter. Thou deservest not my help, yet I grant it!",
+		"Thou art a cad and a bounder. Thy presence is an affront. Thou art low as a slug!",
+		"Thy spirit is weak and feeble. Thou dost not strive for Perfection!",
+		"Thou art proud and vain. All other virtue in thee is a loss!",
 	}, { /* < 40*/
-		/*D_3396*/ "Thou art not an honest soul. Thou must live a more honest life to be an Avatar!",
-		/*D_33E6*/ "Thou dost kill where there is no need and give too little unto others!",
-		/*D_342D*/ "Thou dost not display a great deal of Valor. Thou dost flee before the need!",
-		/*D_347A*/ "Thou art cruel and unjust. In time thou will suffer for thy crimes!",
-		/*D_34BE*/ "Thou dost need to think more of the life of others and less of thy own!",
-		/*D_3506*/ "Thou dost not fight with honor but with malice and deceit!",
-		/*D_3541*/ "Thou dost not take time to care about thy inner being, a must to be an Avatar!",
-		/*D_3590*/ "Thou art too proud of thy little deeds. Humility is the root of all Virtue!",
+		"Thou art not an honest soul. Thou must live a more honest life to be an Avatar!",
+		"Thou dost kill where there is no need and give too little unto others!",
+		"Thou dost not display a great deal of Valor. Thou dost flee before the need!",
+		"Thou art cruel and unjust. In time thou will suffer for thy crimes!",
+		"Thou dost need to think more of the life of others and less of thy own!",
+		"Thou dost not fight with honor but with malice and deceit!",
+		"Thou dost not take time to care about thy inner being, a must to be an Avatar!",
+		"Thou art too proud of thy little deeds. Humility is the root of all Virtue!",
 	}, { /* < 60*/
-		/*D_35DC*/ "Thou hast made little progress on the paths of Honesty. Strive to prove thy worth!",
-		/*D_362F*/ "Thou hast not shown thy compassion well. Be more kind unto others!",
-		/*D_3672*/ "Thou art not yet a valiant warrior.  Fight to defeat evil and prove thyself!",
-		/*D_36BF*/ "Thou hast not proven thyself to be just. Strive to do justice unto all things!",
-		/*D_370E*/ "Thy sacrifice is small. Give of thy life's blood so that others may live.",
-		/*D_3758*/ "Thou dost need to show thyself to be more honorable.  The path lies before thee!",
-		/*D_37A9*/ "Strive to know and master more of thine inner being. Meditation lights the path!",
-		/*D_37FA*/ "Thy progress on this path is most uncertain. Without Humility thou art empty!",
+		"Thou hast made little progress on the paths of Honesty. Strive to prove thy worth!",
+		"Thou hast not shown thy compassion well. Be more kind unto others!",
+		"Thou art not yet a valiant warrior.  Fight to defeat evil and prove thyself!",
+		"Thou hast not proven thyself to be just. Strive to do justice unto all things!",
+		"Thy sacrifice is small. Give of thy life's blood so that others may live.",
+		"Thou dost need to show thyself to be more honorable.  The path lies before thee!",
+		"Strive to know and master more of thine inner being. Meditation lights the path!",
+		"Thy progress on this path is most uncertain. Without Humility thou art empty!",
 	}, { /* < 99*/
-		/*D_3848*/ "Thou dost seem to be an honest soul.  Continued honesty will reward thee!",
-		/*D_3892*/ "Thou dost show thy compassion well.  Continued goodwill should be thy guide!",
-		/*D_38DF*/ "Thou art showing Valor in the face of danger. Strive to become yet more so!",
-		/*D_392B*/ "Thou dost seem fair and just. Strive to uphold Justice even more sternly!",
-		/*D_3975*/ "Thou art giving of thyself in some ways. Seek ye now to find yet more!",
-		/*D_39BC*/ "Thou dost seem to be Honorable in nature.  Seek to bring Honor upon others as well!",
-		/*D_3A10*/ "Thou art doing well on the path to inner sight continue to seek the inner light!",
-		/*D_3A61*/ "Thou dost seem a humble soul.  Thou art setting strong stones to build virtues upon!",
+		"Thou dost seem to be an honest soul.  Continued honesty will reward thee!",
+		"Thou dost show thy compassion well.  Continued goodwill should be thy guide!",
+		"Thou art showing Valor in the face of danger. Strive to become yet more so!",
+		"Thou dost seem fair and just. Strive to uphold Justice even more sternly!",
+		"Thou art giving of thyself in some ways. Seek ye now to find yet more!",
+		"Thou dost seem to be Honorable in nature.  Seek to bring Honor upon others as well!",
+		"Thou art doing well on the path to inner sight continue to seek the inner light!",
+		"Thou dost seem a humble soul.  Thou art setting strong stones to build virtues upon!",
 	}, { /* >= 99*/
-		/*D_3AB6*/ "Thou art truly an honest soul. Seek ye now to reach Elevation!",
-		/*D_3AF5*/ "Compassion is a virtue that thou hast shown well.  Seek ye now Elevation!",
-		/*D_3B3F*/ "Thou art a truly valiant warrior. Seek ye now Elevation in the virtue of valor!",
-		/*D_3B8F*/ "Thou art just and fair.  Seek ye now the Elevation!",
-		/*D_3BC3*/ "Thou art giving and good.  Thy self-sacrifice is great.  Seek now Elevation!",
-		/*D_3C10*/ "Thou hast proven thyself to be Honorable. Seek ye now for the Elevation!",
-		/*D_3C59*/ "Spirituality is in thy nature. Seek ye now the Elevation!",
-		/*D_3C93*/ "Thy Humility shines bright upon thy being. Seek ye now for Elevation!",
+		"Thou art truly an honest soul. Seek ye now to reach Elevation!",
+		"Compassion is a virtue that thou hast shown well.  Seek ye now Elevation!",
+		"Thou art a truly valiant warrior. Seek ye now Elevation in the virtue of valor!",
+		"Thou art just and fair.  Seek ye now the Elevation!",
+		"Thou art giving and good.  Thy self-sacrifice is great.  Seek now Elevation!",
+		"Thou hast proven thyself to be Honorable. Seek ye now for the Elevation!",
+		"Spirituality is in thy nature. Seek ye now the Elevation!",
+		"Thy Humility shines bright upon thy being. Seek ye now for Elevation!",
 	},
 }
 
-var D_913A uint8
-var D_913B, D_913C uint8
-var D_913E uint16 // # of drinks in pub
+// insightBand is how far along a virtue's path karma is, 0 to 4.
+func insightBand(karma uint16) int {
+	switch {
+	case karma < 20:
+		return 0
+	case karma < 40:
+		return 1
+	case karma < 60:
+		return 2
+	case karma < avatarhoodKarma:
+		return 3
+	}
+	return 4
+}
 
-// s16 wraps a Go int to a C int.
-func s16(a int) int { return int(int16(a)) }
+// The seer's visit raises spirituality, once per meditation's while.
+const seerKarma = 3
 
-/*SHOP #10 - The Seer*/
-func SHP_hawkwind() { /*C_C922*/
-	var bp_02, bp_04 int
-	var bp_14 [16]byte
-
-	if !isCharaConscious(0) {
-		u4_puts( /*D_3CD9*/ "The Seer says: I will speak only with ")
-		u4_puts(cstr(Party.chara[0]._name[:]))
-		u4_puts( /*D_3D00*/ ".\nReturn when ")
-		u4_puts(cstr(Party.chara[0]._name[:]))
-		u4_puts( /*D_3D0F*/ " is revived!\n")
+func visitHawkwind() {
+	if !isConscious(0) {
+		printText("The Seer says: I will speak only with ")
+		printText(leaderName())
+		printText(".\nReturn when ")
+		printText(leaderName())
+		printText(" is revived!\n")
 		return
 	}
-	u4_puts( /*D_3D1D*/ "\n\nWelcome, ")
-	u4_puts(cstr(Party.chara[0]._name[:]))
-	u4_puts( /*D_3D29*/ "\nI am Hawkwind, Seer of Souls. I see that which is within thee and drives thee to deeds of good or evil...\n")
-	u_kbflush()
-	u_kbread()
-	bp_14[0] = 0
-	for {
-		if bp_14[0] == 0 {
-			u4_puts( /*D_3D95*/ "\nFor what path dost thou seek enlightenment?\n")
+	printText("\n\nWelcome, ")
+	printText(leaderName())
+	printText("\nI am Hawkwind, Seer of Souls. I see that which is within thee and drives thee to deeds of good or evil...\n")
+	flushKeys()
+	readKey()
+	asked := ""
+	for first := true; ; first = false {
+		if first || asked == "" {
+			printText("\nFor what path dost thou seek enlightenment?\n")
 		} else {
-			u4_puts( /*D_3DC3*/ "\nHawkwind asks: What other path seeks clarity?\n")
+			printText("\nHawkwind asks: What other path seeks clarity?\n")
 		}
-		u4_gets(bp_14[:], 15)
-		if bp_14[0] == 0 ||
-			strnicmp(bp_14[:] /*D_3DF3*/, "none", 16) == 0 ||
-			strnicmp(bp_14[:] /*D_3DF8*/, "bye", 16) == 0 {
+		asked = readWord(14)
+		if asked == "" || strings.EqualFold(asked, "none") || strings.EqualFold(asked, "bye") {
 			break
 		}
-		for bp_04 = 7; bp_04 >= 0; bp_04-- {
-			if strnicmp(bp_14[:], D_1E98[151+bp_04], 4) == 0 {
-				break
-			}
+		virtue := len(virtueNames) - 1
+		for virtue >= 0 && !sameWord(asked, virtueNames[virtue], 4) {
+			virtue--
 		}
-		if bp_04 == -1 {
-			u4_puts( /*D_3DFC*/ "\nHe says: That is not a subject for enlightenment.\n")
+		if virtue == -1 {
+			printText("\nHe says: That is not a subject for enlightenment.\n")
 			continue
 		}
-		Gra_CR()
-		if *(pKarmas[bp_04]) == 0 {
-			u4_puts( /*D_3E30*/ "He says:\nThou hast become a partial Avatar in that attribute. Thou need not my insights.\n")
+		newLine()
+		karma := *karmas[virtue]
+		if karma == 0 {
+			printText("He says:\nThou hast become a partial Avatar in that attribute. Thou need not my insights.\n")
 			continue
 		}
-		if *(pKarmas[bp_04]) < 20 {
-			bp_02 = 0
-		} else if *(pKarmas[bp_04]) < 40 {
-			bp_02 = 1
-		} else if *(pKarmas[bp_04]) < 60 {
-			bp_02 = 2
-		} else if *(pKarmas[bp_04]) < 99 {
-			bp_02 = 3
-		} else {
-			bp_02 = 4
-		}
-		Gra_CR()
-		u4_puts(D_3F0C[bp_02][bp_04])
-		Gra_CR()
-		if bp_02 == 4 {
-			u4_puts( /*D_3E8A*/ "\nGo to the Shrine and meditate for three Cycles!\n")
-			u_kbflush()
-			u_kbread()
+		band := insightBand(karma)
+		newLine()
+		printText(hawkwindInsights[band][virtue])
+		newLine()
+		if band == 4 {
+			printText("\nGo to the Shrine and meditate for three Cycles!\n")
+			flushKeys()
+			readKey()
 		}
 	}
-	u4_puts( /*D_3EBC*/ "\nHawkwind says: Fare thee well and may thou complete the Quest of the Avatar!\n")
-	if Party._moves/100 != uint32(Party.f_1ea) {
-		karma_inc(&(Party._spiri), 3)
-		Party.f_1ea = uint16(Party._moves / 100)
+	printText("\nHawkwind says: Fare thee well and may thou complete the Quest of the Avatar!\n")
+	if party.moves/meditationMoves != uint32(party.lastMeditation) {
+		raiseKarma(&party.karmaSpirituality, seerKarma)
+		party.lastMeditation = uint16(party.moves / meditationMoves)
 	}
 }
 
-/*----------------------------------------*/
+// ---- Reagents ----
 
-/*shops indexes*/
-var D_4170 = [16]uint8{0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 3, 4, 0, 0}
-
-var D_4180 = []string{
-	/*D_3F5C*/ "Magical Herbs",
-	/*D_3F6A*/ "Herbs and Spice",
-	/*D_3F7A*/ "The Magics",
-	/*D_3F85*/ "Magic Mentar",
+type reagentShop struct {
+	shopFront
+	prices [6]int // of the first six reagents: nightshade and mandrake are not sold
 }
 
-var D_4188 = []string{
-	/*D_3F92*/ "Margot",
-	/*D_3F99*/ "Sasha",
-	/*D_3F9F*/ "Shiela",
-	/*D_3FA6*/ "Shannon",
+var reagentShops = []reagentShop{
+	{shopFront{locMoonglow, "Magical Herbs", "Margot"}, [6]int{2, 5, 6, 3, 6, 9}},
+	{shopFront{locSkaraBrae, "Herbs and Spice", "Sasha"}, [6]int{2, 4, 9, 6, 4, 8}},
+	{shopFront{locPaws, "The Magics", "Shiela"}, [6]int{3, 4, 2, 9, 6, 7}},
+	{shopFront{locBuccaneersDen, "Magic Mentar", "Shannon"}, [6]int{6, 7, 9, 9, 9, 1}},
 }
 
-var D_4190 = [][6]uint8{
-	{2, 5, 6, 3, 6, 9},
-	{2, 4, 9, 6, 4, 8},
-	{3, 4, 2, 9, 6, 7},
-	{6, 7, 9, 9, 9, 1},
+// Paying the blind woman less than the price costs honesty, justice and honor: a third of
+// the shortfall, at least cheatMinimum; paying in full raises them.
+const (
+	cheatMinimum   = 4
+	cheatThreshold = 12
+	fairPayKarma   = 2
+)
+
+// cheatKarma is the karma lost by paying short of the price.
+func cheatKarma(short int) int {
+	if short < cheatThreshold {
+		return cheatMinimum
+	}
+	return short / 3
 }
 
-/*SHOP #5 - reagents*/
-func SHP_reagent() { /*C_CAF6*/
-	var loc_C int
-	var loc_A, loc_B, loc_D, loc_E int
-
-	D_9142 = int16(int(D_4170[Party._loc-1]) - 1)
-	u4_puts( /*D_3FAE*/ "A blind woman turns to you and says: Welcome to ")
-	u4_puts(D_4180[D_9142])
-	Gra_13()
-	C_4BC7(0)
-	u4_puts( /*D_3FDF*/ "\n\nI am ")
-	u4_puts(D_4188[D_9142])
-	u4_puts( /*D_3FE7*/ "\nAre you in need of Reagents?\x12\x12\b")
-	loc_C = AskY_N()
-	if loc_C == 'Y' {
-		u4_puts( /*D_4008*/ "Very well,\n")
+func visitReagentShop() {
+	shop := reagentShops[findShop(reagentShops)]
+	printText("A blind woman turns to you and says: Welcome to ")
+	printText(shop.name)
+	clearStatus()
+	showReagents()
+	printText("\n\nI am ")
+	printText(shop.keeper)
+	printText("\nAre you in need of Reagents?" + answerRoom(2))
+	if askYesNo() == 'Y' {
+		printText("Very well,\n")
 		for {
-			u4_puts( /*D_4014*/ "I have\nA-Sulfurous Ash\nB-Ginseng\nC-Garlic\nD-Spider Silk\nE-Blood Moss\nF-Black Pearl\n")
-			loc_B = AskLetter( /*D_4068*/ "Your Interest:\x12\x12\b", 'A', 'F')
-			loc_B -= 'A'
-			if loc_B < 0 {
+			printText("I have\nA-Sulfurous Ash\nB-Ginseng\nC-Garlic\nD-Spider Silk\nE-Blood Moss\nF-Black Pearl\n")
+			reagent := askLetter("Your Interest:"+answerRoom(2), 'A', 'F') - 'A'
+			if reagent < 0 {
 				break
 			}
-			u4_puts( /*D_407A*/ "\nVery well, we sell ")
-			u4_puts(D_1E98[93+loc_B])
-			u4_puts( /*D_408F*/ " for ")
-			u4_putl(int32(D_4190[D_9142][loc_B]), 1, '0')
-			u4_puts( /*D_4095*/ "gp. How many would you like?\x12\x12\x12\b\b")
-			loc_A = s16(int(AskInt(2)))
-			if loc_A > 0 {
-				u4_puts( /*D_40B7*/ "\nVery good, that will be ")
-				u4_putl(int32(loc_A)*int32(D_4190[D_9142][loc_B]), 1, '0')
-				u4_puts( /*D_40D1*/ "gp. You pay:\x12\x12\x12\x12\b\b\b")
-				loc_D = s16(int(AskInt(3)))
-				if loc_D <= 0 {
-					if loc_D < 0 {
-						sound(1)
-					}
-				} else {
-					if loc_D < s16(loc_A*int(D_4190[D_9142][loc_B])) {
-						loc_E = s16(loc_A*int(D_4190[D_9142][loc_B]) - loc_D)
-						if loc_E < 12 {
-							loc_E = 4
-						} else {
-							loc_E = loc_E / 3
-						}
-						karma_dec(&(Party._hones), loc_E)
-						karma_dec(&(Party._justi), loc_E)
-						karma_dec(&(Party._honor), loc_E)
-					}
-					if uint16(loc_D) > Party._gold {
-						u4_puts( /*D_40E5*/ "It seems you have not the gold!\n")
-					} else {
-						karma_inc(&(Party._hones), 2)
-						karma_inc(&(Party._justi), 2)
-						karma_inc(&(Party._honor), 2)
-						Party._gold -= uint16(loc_D)
-						dspl_Gold()
-						Party._reagents[loc_B] += uint16(loc_A)
-						if Party._reagents[loc_B] > 99 {
-							Party._reagents[loc_B] = 99
-						}
-						C_4BC7(0)
-						u4_puts( /*D_4106*/ "\nVery good.\n")
-					}
-				}
+			price := shop.prices[reagent]
+			printText("\nVery well, we sell ")
+			printText(reagentNames[reagent])
+			printText(" for ")
+			printNumber(int32(price), 1, '0')
+			printText("gp. How many would you like?" + answerRoom(3))
+			if count := askAmount(2); count > 0 {
+				buyReagents(reagent, count, price)
 			} else {
-				u4_puts( /*D_4113*/ "\nI see, then\n")
+				printText("\nI see, then\n")
 			}
-			u4_puts( /*D_4121*/ "Anything else?\x12\x12\b")
-			loc_C = AskY_N()
-			if loc_C != 'Y' {
+			printText("Anything else?" + answerRoom(2))
+			if askYesNo() != 'Y' {
 				break
 			}
 		}
 	}
-	Gra_13()
-	C_4649()
-	dspl_Stats()
-	Gra_CR()
-	u4_puts(D_4188[D_9142])
-	u4_puts( /*D_4133*/ " says: Perhaps another time then.... and slowly turns away.\n")
+	clearStatus()
+	clearStatusTitle()
+	showStats()
+	newLine()
+	printText(shop.keeper)
+	printText(" says: Perhaps another time then.... and slowly turns away.\n")
 }
 
-/*----------------------------------------*/
-
-var D_46A2 = []string{
-	/*D_41A8*/ "Windsor Weaponry",
-	/*D_41B9*/ "Willard's Weaponry",
-	/*D_41CC*/ "The Iron Works",
-	/*D_41DB*/ "Duelling Weapons",
-	/*D_41EC*/ "Hook's Arms",
-	/*D_41F8*/ "Village Arms",
-}
-
-var D_46AE = []string{
-	/*D_4205*/ "Winston",
-	/*D_420D*/ "Willard",
-	/*D_4215*/ "Peter",
-	/*D_421B*/ "Jumar",
-	/*D_4221*/ "Hook",
-	/*D_4226*/ "Wendy",
-}
-
-var D_46BA = [][4]uint8{
-	{1, 2, 3, 6},
-	{5, 6, 8, 10},
-	{4, 10, 11, 12},
-	{4, 5, 6, 7},
-	{8, 9, 13, 14},
-	{2, 3, 7, 9},
-}
-
-/*prices[weapons]*/
-var D_46D2 = []int{
-	0,
-	20,
-	2,
-	25,
-	100,
-	225,
-	300,
-	250,
-	600,
-	5,
-	350,
-	1500,
-	2500,
-	2000,
-	5000,
-
-	7000, /*what is this price for?*/
-}
-
-/*shops indexes*/
-var D_46F2 = [16]uint8{0, 0, 0, 0, 0, 1, 2, 0, 3, 4, 0, 0, 0, 5, 6, 0}
-
-var D_4702 = []string{
-	/*D_422C*/ "We are the only staff makers in Britannia, yet sell them for only 20gp.\n",
-	/*D_4275*/ "We sell the most deadly of daggers, a bargain at only 2gp each.\n",
-	/*D_42B6*/ "Our slings are made from only the finest gut and leather, 'Tis yours for 25gp.\n",
-	/*D_4306*/ "These maces have a hardened shaft and a 5lb head fairly priced at 100gp.\n",
-	/*D_4350*/ "Notice the fine workmanship on this axe, you'll agree 225gp is a good price.\n",
-	/*D_439E*/ "The fine work on these swords will be the dread of thy foes, for 300gp.\n",
-	/*D_43E7*/ "Our bows are made of finest yew, and the arrows willow, a steal at 250gp.\n",
-	/*D_4432*/ "Crossbows made by Iolo the Bard are the finest in the world, yours for 600gp.\n",
-	/*D_4481*/ "Flasks of oil make great weapons and creates a wall of flame too. 5gp each.\n",
-	/*D_44CE*/ "A Halberd is a mighty weapon to attack over obstacles; a must and only 350gp.\n",
-	/*D_451D*/ "This magical axe can be thrown at thy enemy and will then return all for 1500gp.\n",
-	/*D_456F*/ "Magical swords such as these are rare indeed I will part with one for 2500gp.\n",
-	/*D_45BE*/ "A magical bow will keep thy enemies far away or dead! A must for 2000gp!\n",
-	/*D_4608*/ "This magic wand casts mighty blue bolts to strike down thy foes, 5000gp.\n",
-}
-
-/*finalize deal[weapon]*/
-func C_CD1D(bp06, bp04 int) {
-	if uint16(D_46D2[bp06]*bp04) > Party._gold {
-		u4_puts( /*D_4652*/ "I fear you have not the funds, perhaps something else.\n")
+// buyReagents: the blind woman takes what the party says it pays.
+func buyReagents(reagent, count, price int) {
+	printText("\nVery good, that will be ")
+	printNumber(int32(count)*int32(price), 1, '0')
+	printText("gp. You pay:" + answerRoom(4))
+	paid := askAmount(3)
+	if paid <= 0 {
+		if paid < 0 {
+			sound(soundBeep)
+		}
 		return
 	}
-	Party._gold -= uint16(D_46D2[bp06] * bp04)
-	dspl_Gold()
-	Party._weapons[bp06] += uint16(bp04)
-	if Party._weapons[bp06] > 99 {
-		Party._weapons[bp06] = 99
+	if paid < count*price {
+		lost := cheatKarma(count*price - paid)
+		lowerKarma(&party.karmaHonesty, lost)
+		lowerKarma(&party.karmaJustice, lost)
+		lowerKarma(&party.karmaHonor, lost)
 	}
-	C_4832(0)
-	Gra_CR()
-	u4_puts(D_46AE[D_9142])
-	u4_puts( /*D_468A*/ " says: A fine choice!\n")
+	if uint16(paid) > party.gold {
+		printText("It seems you have not the gold!\n")
+		return
+	}
+	raiseKarma(&party.karmaHonesty, fairPayKarma)
+	raiseKarma(&party.karmaJustice, fairPayKarma)
+	raiseKarma(&party.karmaHonor, fairPayKarma)
+	party.gold -= uint16(paid)
+	showGold()
+	party.reagents[reagent] = min(party.reagents[reagent]+uint16(count), maxStock)
+	showReagents()
+	printText("\nVery good.\n")
 }
 
-/*choose item[weapon]*/
-func C_CD80() {
-	var loc_A, loc_B, loc_C int
+// ---- Weapons and armour ----
 
-	Gra_CR()
-	u4_puts( /*D_471E*/ "\n\nVery Good!\n\n")
+var weaponPrices = [16]int{
+	weaponHands:       0,
+	weaponStaff:       20,
+	weaponDagger:      2,
+	weaponSling:       25,
+	weaponMace:        100,
+	weaponAxe:         225,
+	weaponSword:       300,
+	weaponBow:         250,
+	weaponCrossbow:    600,
+	weaponOil:         5,
+	weaponHalberd:     350,
+	weaponMagicAxe:    1500,
+	weaponMagicSword:  2500,
+	weaponMagicBow:    2000,
+	weaponMagicWand:   5000,
+	weaponMysticSword: 7000, // never sold
+}
+
+var armorPrices = [8]int{
+	armorSkin:       0,
+	armorCloth:      50,
+	armorLeather:    200,
+	armorChainMail:  600,
+	armorPlateMail:  2000,
+	armorMagicChain: 4000,
+	armorMagicPlate: 7000,
+	armorMysticRobe: 9000, // never sold
+}
+
+// weaponPitches are what the weapon smiths say of each weapon.
+var weaponPitches = [16]string{
+	weaponStaff:      "We are the only staff makers in Britannia, yet sell them for only 20gp.\n",
+	weaponDagger:     "We sell the most deadly of daggers, a bargain at only 2gp each.\n",
+	weaponSling:      "Our slings are made from only the finest gut and leather, 'Tis yours for 25gp.\n",
+	weaponMace:       "These maces have a hardened shaft and a 5lb head fairly priced at 100gp.\n",
+	weaponAxe:        "Notice the fine workmanship on this axe, you'll agree 225gp is a good price.\n",
+	weaponSword:      "The fine work on these swords will be the dread of thy foes, for 300gp.\n",
+	weaponBow:        "Our bows are made of finest yew, and the arrows willow, a steal at 250gp.\n",
+	weaponCrossbow:   "Crossbows made by Iolo the Bard are the finest in the world, yours for 600gp.\n",
+	weaponOil:        "Flasks of oil make great weapons and creates a wall of flame too. 5gp each.\n",
+	weaponHalberd:    "A Halberd is a mighty weapon to attack over obstacles; a must and only 350gp.\n",
+	weaponMagicAxe:   "This magical axe can be thrown at thy enemy and will then return all for 1500gp.\n",
+	weaponMagicSword: "Magical swords such as these are rare indeed I will part with one for 2500gp.\n",
+	weaponMagicBow:   "A magical bow will keep thy enemies far away or dead! A must for 2000gp!\n",
+	weaponMagicWand:  "This magic wand casts mighty blue bolts to strike down thy foes, 5000gp.\n",
+}
+
+// armorPitches are what the armourers say of each armour.
+var armorPitches = [8]string{
+	armorCloth:      "Cloth Armour is good for a tight budget, Fairly priced at 50gp.\n",
+	armorLeather:    "Leather Armour is both supple and strong, and costs a mere 200gp.\nA Bargain!\n",
+	armorChainMail:  "Chain Mail is the armour used by more warriors than all others. Ours costs 600gp.\n",
+	armorPlateMail:  "Full Plate armour is the ultimate in non-magical armour. Get yours for 2000gp.\n",
+	armorMagicChain: "Magic Armour is rare and expensive.  This chain sells for 4000gp.\n",
+	armorMagicPlate: "Magic Plate Armour is the best known protection. Only we have it. Cost: 7000gp.\n",
+}
+
+type weaponShop struct {
+	shopFront
+	stock [4]int
+}
+
+var weaponShops = []weaponShop{
+	{shopFront{locBritain, "Windsor Weaponry", "Winston"}, [4]int{weaponStaff, weaponDagger, weaponSling, weaponSword}},
+	{shopFront{locJhelom, "Willard's Weaponry", "Willard"}, [4]int{weaponAxe, weaponSword, weaponCrossbow, weaponHalberd}},
+	{shopFront{locMinoc, "The Iron Works", "Peter"}, [4]int{weaponMace, weaponHalberd, weaponMagicAxe, weaponMagicSword}},
+	{shopFront{locTrinsic, "Duelling Weapons", "Jumar"}, [4]int{weaponMace, weaponAxe, weaponSword, weaponBow}},
+	{shopFront{locBuccaneersDen, "Hook's Arms", "Hook"}, [4]int{weaponCrossbow, weaponOil, weaponMagicBow, weaponMagicWand}},
+	{shopFront{locVesper, "Village Arms", "Wendy"}, [4]int{weaponDagger, weaponSling, weaponBow, weaponOil}},
+}
+
+type armorShop struct {
+	shopFront
+	stock [4]int // 0: an empty slot
+}
+
+var armorShops = []armorShop{
+	{shopFront{locBritain, "Windsor Armour", "Winston"}, [4]int{armorCloth, armorLeather, armorChainMail}},
+	{shopFront{locJhelom, "Valiant's Armour", "Valiant"}, [4]int{armorChainMail, armorPlateMail, armorMagicChain, armorMagicPlate}},
+	{shopFront{locTrinsic, "Duelling Armour", "Jean"}, [4]int{armorCloth, armorChainMail, armorMagicChain}},
+	{shopFront{locPaws, "Light Armour", "Pierre"}, [4]int{armorCloth, armorLeather}},
+	{shopFront{locBuccaneersDen, "Basic Armour", "Limpy"}, [4]int{armorCloth, armorLeather, armorChainMail}},
+}
+
+// halfPrice is what a shop gives back for count items of a price.
+func halfPrice(count, price int) int32 { return int32(count) * int32(price) / 2 }
+
+// takeGold adds gold to the party's, up to maxGold.
+func takeGold(amount int32) { party.gold = uint16(min(int32(party.gold)+amount, maxGold)) }
+
+// askStocked asks for one of the shop's items by letter (from B to last), sounding for
+// any it does not have; the item, or -1.
+func askStocked(question string, last int, stock [4]int) int {
 	for {
-		u4_puts( /*D_472D*/ "We have:\n")
-		for loc_B = 0; loc_B < 4; loc_B++ {
-			u4_putc(int(D_46BA[D_9142][loc_B]) + 'A')
-			u4_putc('-')
-			u4_puts(D_1E98[37+int(D_46BA[D_9142][loc_B])])
-			u4_putc('s')
-			Gra_CR()
+		item := askLetter(question, 'B', last) - 'A'
+		if item <= 0 || slices.Contains(stock[:], item) {
+			return item
 		}
-
-		for {
-			loc_C = AskLetter( /*D_4737*/ "Your Interest?\x12\x12\b", 'B', 'O')
-			loc_C -= 'A'
-			if loc_C <= 0 {
-				break
-			}
-			for loc_B = 0; loc_B < 4; loc_B++ {
-				if int(D_46BA[D_9142][loc_B]) == loc_C {
-					break
-				}
-			}
-			if loc_B == 4 {
-				sound(1)
-			}
-			if loc_B != 4 {
-				break
-			}
-		}
-		if loc_C < 0 {
-			break
-		}
-		if uint16(D_46D2[loc_C]) > Party._gold {
-			u4_puts( /*D_4749*/ "You have not the funds for even one!\n")
-		} else {
-			Gra_CR()
-			u4_puts(D_4702[loc_C-1])
-			Gra_CR()
-			u4_puts( /*D_476F*/ "How many would you like?\x12\x12\x12\b\b")
-			loc_A = s16(int(AskInt(2)))
-			if loc_A <= 0 {
-				if loc_A == 0 {
-					u4_puts( /*D_478D*/ "\nToo bad.\n")
-				} else {
-					sound(1)
-				}
-			} else {
-				C_CD1D(loc_C, loc_A)
-			}
-		}
-		u4_puts( /*D_4798*/ "\nAnything else?\x12\x12\b")
-		loc_C = int(int8(AskY_N()))
-		if loc_C != 'Y' {
-			break
-		}
-	}
-	Gra_CR()
-}
-
-// shopClamp is the C's clamp(gold, add, 9999) macro.
-func shopClamp(a *uint16, b int32, c int32) {
-	if int32(*a)+b > c {
-		*a = uint16(c)
-	} else {
-		*a += uint16(b)
+		sound(soundBeep)
 	}
 }
 
-/*sell item[weapon]*/
-func C_CEBE() {
-	var loc_A, loc_B int
-	var loc_C int // QUIRK: stays stale (or 0) when the loop continues after "Thou dost not own that"
-
-	u4_puts( /*D_47AB*/ "\nExcellent! Which wouldst\n")
-	loc_B = -1
+func buyWeapons(keeper string, stock [4]int) {
+	newLine()
+	printText("\n\nVery Good!\n\n")
 	for {
-		txt_Y = 23
-		txt_X = 24
-		loc_B = AskLetter( /*D_47C6*/ "You sell:\x12\x12\b", 'B', 'P')
-		loc_B -= 'A'
-		Gra_CR()
-		if loc_B <= 0 {
+		printText("We have:\n")
+		for _, w := range stock {
+			printChar(w + 'A')
+			printChar('-')
+			printText(weaponNames[w])
+			printChar('s')
+			newLine()
+		}
+		w := askStocked("Your Interest?"+answerRoom(2), 'O', stock)
+		if w < 0 {
 			break
 		}
-		if Party._weapons[loc_B] == 0 {
-			u4_puts( /*D_47D3*/ "Thou dost not own that. What else might\n")
+		if uint16(weaponPrices[w]) > party.gold {
+			printText("You have not the funds for even one!\n")
 		} else {
-			if Party._weapons[loc_B] > 1 {
-				u4_puts( /*D_47FC*/ "How many ")
-				u4_puts(D_1E98[37+loc_B])
-				u4_puts( /*D_4806*/ "s would you wish to sell?\x12\x12\x12\b\b")
-				loc_A = s16(int(AskInt(2)))
-				if loc_A <= 0 {
-					if loc_A == 0 {
-						u4_puts( /*D_4825*/ "\nToo bad.\n")
+			newLine()
+			printText(weaponPitches[w])
+			newLine()
+			printText("How many would you like?" + answerRoom(3))
+			switch count := askAmount(2); {
+			case count > 0:
+				sellWeapon(keeper, w, count)
+			case count == 0:
+				printText("\nToo bad.\n")
+			default:
+				sound(soundBeep)
+			}
+		}
+		printText("\nAnything else?" + answerRoom(2))
+		if askYesNo() != 'Y' {
+			break
+		}
+	}
+	newLine()
+}
+
+// sellWeapon sells count of the weapon to the party, if it can pay for them all.
+func sellWeapon(keeper string, w, count int) {
+	cost := uint16(weaponPrices[w] * count) // 16 bits, as the original: big orders wrap
+	if cost > party.gold {
+		printText("I fear you have not the funds, perhaps something else.\n")
+		return
+	}
+	party.gold -= cost
+	showGold()
+	party.weapons[w] = min(party.weapons[w]+uint16(count), maxStock)
+	showWeapons()
+	newLine()
+	printText(keeper)
+	printText(" says: A fine choice!\n")
+}
+
+// buyBackWeapons buys the party's weapons back at half price.
+func buyBackWeapons() {
+	printText("\nExcellent! Which wouldst\n")
+	answer := 0 // quirk: kept from the last deal when the party offers what it lacks
+	for {
+		textRow, textCol = promptRow, promptCol
+		w := askLetter("You sell:"+answerRoom(2), 'B', 'P') - 'A'
+		newLine()
+		if w <= 0 {
+			break
+		}
+		if party.weapons[w] == 0 {
+			printText("Thou dost not own that. What else might\n")
+		} else {
+			count := 1
+			if party.weapons[w] > 1 {
+				printText("How many ")
+				printText(weaponNames[w])
+				printText("s would you wish to sell?" + answerRoom(3))
+				count = askAmount(2)
+				if count <= 0 {
+					if count == 0 {
+						printText("\nToo bad.\n")
 					} else {
-						sound(1)
+						sound(soundBeep)
 					}
 					break
 				}
-				if Party._weapons[loc_B] < uint16(loc_A) {
-					u4_puts( /*D_4830*/ "You don't have that many swine!\n")
+				if party.weapons[w] < uint16(count) {
+					printText("You don't have that many swine!\n")
 					break
 				}
-				u4_puts( /*D_4851*/ "I will give you ")
-				u4_putl((int32(loc_A)*int32(D_46D2[loc_B]))>>1, 1, '0')
-				u4_puts( /*D_4862*/ "gp for ")
-				if loc_A > 1 {
-					u4_puts( /*D_486A*/ "them.")
-				} else {
-					u4_puts( /*D_4870*/ "it.")
-				}
+				printText("I will give you ")
+				printNumber(halfPrice(count, weaponPrices[w]), 1, '0')
+				printText("gp for ")
+				printText(themOrIt(count))
 			} else {
-				loc_A = 1
-				u4_puts( /*D_4874*/ "I will give you ")
-				u4_putl(int32(D_46D2[loc_B])>>1, 1, '0')
-				u4_puts( /*D_4885*/ "gp for that ")
-				u4_puts(D_1E98[37+loc_B])
+				printText("I will give you ")
+				printNumber(halfPrice(1, weaponPrices[w]), 1, '0')
+				printText("gp for that ")
+				printText(weaponNames[w])
 			}
-			u4_puts( /*D_4892*/ "\nDeal?\x12\x12\b")
-			loc_C = int(int8(AskY_N()))
-			if loc_C < 'N' {
+			printText("\nDeal?" + answerRoom(2))
+			answer = askYesNo()
+			if answer < 'N' { // a blank or escape
 				break
 			}
-			if loc_C == 'N' {
-				u4_puts( /*D_489C*/ "Hmmph. What else would\n")
+			if answer == 'N' {
+				printText("Hmmph. What else would\n")
 			} else {
-				Party._weapons[loc_B] -= uint16(loc_A)
-				shopClamp(&Party._gold, (int32(loc_A)*int32(D_46D2[loc_B]))>>1, 9999)
-				dspl_Gold()
-				C_4832(0)
-				u4_puts( /*D_48B4*/ "\nFine! What else?\n")
+				party.weapons[w] -= uint16(count)
+				takeGold(halfPrice(count, weaponPrices[w]))
+				showGold()
+				showWeapons()
+				printText("\nFine! What else?\n")
 			}
 		}
-		if !(loc_C == 'Y' || loc_C == 'N') {
+		if answer != 'Y' && answer != 'N' {
 			break
 		}
 	}
 }
 
-// shopBuySell reads the Buy/Sell answer: 'b', 's' or 0 (leave).
-func shopBuySell() int {
-	var bp_02 int
+func themOrIt(count int) string {
+	if count > 1 {
+		return "them."
+	}
+	return "it."
+}
+
+// askBuyOrSell reads the Buy or Sell answer: 'b', 's' or 0 to leave.
+func askBuyOrSell() int {
 	for {
-		askKeys("", item("Buy", key('b')), item("Sell", key('s')), item("Leave", KBD_ESC))
-		bp_02 = int(int8(u_kbread()))
-		switch bp_02 {
+		askKeys("", item("Buy", key('b')), item("Sell", key('s')), item("Leave", keyEsc))
+		switch int(int8(readKey())) {
 		case 'B', 'b':
-			bp_02 = 'b'
+			return 'b'
 		case 'S', 's':
-			bp_02 = 's'
-		case ' ', '\n', '\r', 0x1b:
-			bp_02 = 0
-			Gra_CR()
-		default:
-			bp_02 = -1
-			sound(1)
+			return 's'
+		case ' ', '\n', '\r', 27:
+			newLine()
+			return 0
 		}
-		if bp_02 != -1 {
-			return bp_02
-		}
+		sound(soundBeep)
 	}
 }
 
-/*SHOP #1 - weapons*/
-func SHP_weapon() { /*C_D085*/
-	var bp_02 int
-
-	Gra_13()
-	C_4832(0)
-	D_9142 = int16(int(D_46F2[Party._loc-1]) - 1)
-	u4_puts( /*D_48C7*/ "\n\n\n\nWelcome to ")
-	u4_puts(D_46A2[D_9142])
-	u4_puts( /*D_48D7*/ "\n\n")
-	u4_puts(D_46AE[D_9142])
-	u4_puts( /*D_48DA*/ " says: Welcome friend! Art thou here to Buy or Sell? ")
-	bp_02 = shopBuySell()
-	if bp_02 != 0 {
-		u4_putc(bp_02)
-		Gra_CR()
-		if bp_02 == 'b' {
-			C_CD80()
+func visitWeaponShop() {
+	shop := weaponShops[findShop(weaponShops)]
+	clearStatus()
+	showWeapons()
+	printText("\n\n\n\nWelcome to ")
+	printText(shop.name)
+	printText("\n\n")
+	printText(shop.keeper)
+	printText(" says: Welcome friend! Art thou here to Buy or Sell? ")
+	if choice := askBuyOrSell(); choice != 0 {
+		printChar(choice)
+		newLine()
+		if choice == 'b' {
+			buyWeapons(shop.keeper, shop.stock)
 		} else {
-			C_CEBE()
+			buyBackWeapons()
 		}
 	}
-	C_4649()
-	Gra_13()
-	dspl_Stats()
-	Gra_CR()
-	u4_puts(D_46AE[D_9142])
-	u4_puts( /*D_4910*/ " says: Fare thee well!\n")
+	clearStatusTitle()
+	clearStatus()
+	showStats()
+	newLine()
+	printText(shop.keeper)
+	printText(" says: Fare thee well!\n")
 }
 
-/*----------------------------------------*/
-
-var D_4BAE = []string{
-	/*D_4928*/ "Windsor Armour",
-	/*D_4937*/ "Valiant's Armour",
-	/*D_4948*/ "Duelling Armour",
-	/*D_4958*/ "Light Armour",
-	/*D_4965*/ "Basic Armour",
+func buyArmour(keeper string, stock [4]int) {
+	printText("\n\n\nWell then,\n")
+	for {
+		printText("We've got:\n")
+		for _, a := range stock {
+			if a != armorSkin {
+				printChar(a + 'A')
+				printChar(' ')
+				printText(armorNames[a])
+				newLine()
+			}
+		}
+		newLine()
+		a := askStocked("What'll it be?"+answerRoom(2), 'G', stock)
+		if a < 0 {
+			break
+		}
+		if uint16(armorPrices[a]) > party.gold {
+			printText("What you try'n to pull? You can't pay!\n")
+		} else {
+			newLine()
+			printText(armorPitches[a])
+			newLine()
+			printText("How many would you like?" + answerRoom(3))
+			if count := askAmount(2); count > 0 {
+				sellArmour(keeper, a, count)
+			} else {
+				printText("\nToo bad.\n")
+			}
+		}
+		printText("\nAnything else?" + answerRoom(2))
+		if askYesNo() != 'Y' {
+			break
+		}
+	}
 }
 
-var D_4BB8 = []string{
-	/*D_4972*/ "Winston",
-	/*D_497A*/ "Valiant",
-	/*D_4982*/ "Jean",
-	/*D_4987*/ "Pierre",
-	/*D_498E*/ "Limpy",
-
-	/*D_4994*/ "Big John", /*?!?who is that?!?*/
-}
-
-var D_4BC4 = [][4]uint8{
-	{1, 2, 3, 0},
-	{3, 4, 5, 6},
-	{1, 3, 5, 0},
-	{1, 2, 0, 0},
-	{1, 2, 3, 0},
-
-	{0, 0, 0, 0},
-}
-
-/*prices[armour]*/
-var D_4BDC = []int{
-	0,
-	50,
-	200,
-	600,
-	2000,
-	4000,
-	7000,
-
-	9000, /*what is this price for?*/
-}
-
-/*shops indexes*/
-var D_4BEC = [16]uint8{0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 0, 0, 4, 5, 0, 0}
-
-var D_4BFC = []string{
-	/*D_499D*/ "Cloth Armour is good for a tight budget, Fairly priced at 50gp.\n",
-	/*D_49DE*/ "Leather Armour is both supple and strong, and costs a mere 200gp.\nA Bargain!\n",
-	/*D_4A2C*/ "Chain Mail is the armour used by more warriors than all others. Ours costs 600gp.\n",
-	/*D_4A7F*/ "Full Plate armour is the ultimate in non-magical armour. Get yours for 2000gp.\n",
-	/*D_4ACF*/ "Magic Armour is rare and expensive.  This chain sells for 4000gp.\n",
-	/*D_4B12*/ "Magic Plate Armour is the best known protection. Only we have it. Cost: 7000gp.\n",
-}
-
-/*finalize deal[armor]*/
-func C_D16D(bp06, bp04 int) {
-	if uint16(D_4BDC[bp06]*bp04) > Party._gold {
-		u4_puts( /*D_4B63*/ "You don't have enough gold.\nMaybe something cheaper?\n")
+// sellArmour sells count of the armour to the party, if it can pay for them all.
+func sellArmour(keeper string, a, count int) {
+	cost := uint16(armorPrices[a] * count) // 16 bits, as the original: big orders wrap
+	if cost > party.gold {
+		printText("You don't have enough gold.\nMaybe something cheaper?\n")
 		return
 	}
-	Party._gold -= uint16(D_4BDC[bp06] * bp04)
-	dspl_Gold()
-	Party._armors[bp06] += uint16(bp04)
-	if Party._armors[bp06] > 99 {
-		Party._armors[bp06] = 99
-	}
-	C_48F8(0)
-	Gra_CR()
-	u4_puts(D_4BB8[D_9142])
-	u4_puts( /*D_4B99*/ " says: Good choice!\n")
+	party.gold -= cost
+	showGold()
+	party.armors[a] = min(party.armors[a]+uint16(count), maxStock)
+	showArmour()
+	newLine()
+	printText(keeper)
+	printText(" says: Good choice!\n")
 }
 
-/*choose item[armor]*/
-func C_D1D0() {
-	var loc_A, loc_B, loc_C int
-
-	u4_puts( /*D_4C08*/ "\n\n\nWell then,\n")
+// buyBackArmour buys the party's armour back at half price.
+func buyBackArmour() {
+	printText("\nWhat will\n")
+	answer := 0 // quirk: kept from the last deal when the party offers what it lacks
 	for {
-		u4_puts( /*D_4C17*/ "We've got:\n")
-		for loc_B = 0; loc_B < 4; loc_B++ {
-			if D_4BC4[D_9142][loc_B] != 0 {
-				u4_putc(int(D_4BC4[D_9142][loc_B]) + 'A')
-				u4_putc(' ')
-				u4_puts(D_1E98[53+int(D_4BC4[D_9142][loc_B])])
-				Gra_CR()
-			}
+		textRow, textCol = promptRow, promptCol
+		a := askLetter("You sell:"+answerRoom(2), 'B', 'H') - 'A'
+		newLine()
+		if a <= 0 {
+			break
 		}
-		Gra_CR()
-		for {
-			loc_C = AskLetter( /*D_4C23*/ "What'll it be?\x12\x12\b", 'B', 'G')
-			loc_C -= 'A'
-			if loc_C <= 0 {
-				break
-			}
-			for loc_B = 0; loc_B < 4; loc_B++ {
-				if int(D_4BC4[D_9142][loc_B]) == loc_C {
+		if party.armors[a] == 0 {
+			printText("Come on, you don't own any.\n")
+		} else {
+			count := 1
+			if party.armors[a] > 1 {
+				printText("How many ")
+				printText(armorNames[a])
+				printText("s would you like to sell?" + answerRoom(3))
+				count = askAmount(2)
+				if count <= 0 {
+					printText("\nToo bad.\n")
 					break
 				}
-			}
-			if loc_B == 4 {
-				sound(1)
-			}
-			if loc_B != 4 {
-				break
-			}
-		}
-		if loc_C < 0 {
-			break
-		}
-		if uint16(D_4BDC[loc_C]) > Party._gold {
-			u4_puts( /*D_4C35*/ "What you try'n to pull? You can't pay!\n")
-		} else {
-			Gra_CR()
-			u4_puts(D_4BFC[loc_C-1])
-			Gra_CR()
-			u4_puts( /*D_4C5D*/ "How many would you like?\x12\x12\x12\b\b")
-			loc_A = s16(int(AskInt(2)))
-			if loc_A <= 0 {
-				u4_puts( /*D_4C7B*/ "\nToo bad.\n")
-			} else {
-				C_D16D(loc_C, loc_A)
-			}
-		}
-		u4_puts( /*D_4C86*/ "\nAnything else?\x12\x12\b")
-		loc_C = int(int8(AskY_N()))
-		if loc_C != 'Y' {
-			break
-		}
-	}
-}
-
-/*sell item[armor]*/
-func C_D2F8() {
-	var loc_A, loc_B int
-	var loc_C int // QUIRK: stale (or 0) when the loop continues after "you don't own any"
-
-	u4_puts( /*D_4C99*/ "\nWhat will\n")
-	loc_B = -1
-	for {
-		txt_Y = 23
-		txt_X = 24
-		loc_B = AskLetter( /*D_4CA5*/ "You sell:\x12\x12\b", 'B', 'H')
-		loc_B -= 'A'
-		Gra_CR()
-		if loc_B <= 0 {
-			break
-		}
-		if Party._armors[loc_B] == 0 {
-			u4_puts( /*D_4CB2*/ "Come on, you don't own any.\n")
-		} else {
-			if Party._armors[loc_B] > 1 {
-				u4_puts( /*D_4CCF*/ "How many ")
-				u4_puts(D_1E98[53+loc_B])
-				u4_puts( /*D_4CD9*/ "s would you like to sell?\x12\x12\x12\b\b")
-				loc_A = s16(int(AskInt(2)))
-				if loc_A <= 0 {
-					u4_puts( /*D_4CF8*/ "\nToo bad.\n")
+				if party.armors[a] < uint16(count) {
+					printText("You don't have that many swine!\n")
 					break
 				}
-				if Party._armors[loc_B] < uint16(loc_A) {
-					u4_puts( /*D_4D03*/ "You don't have that many swine!\n")
-					break
-				}
-				u4_puts( /*D_4D24*/ "I'll give ya\n")
-				u4_putl((int32(loc_A)*int32(D_4BDC[loc_B]))>>1, 1, '0')
-				u4_puts( /*D_4D32*/ "gp for ")
-				if loc_A > 1 {
-					u4_puts( /*D_4D3A*/ "them.")
-				} else {
-					u4_puts( /*D_4D40*/ "it.")
-				}
+				printText("I'll give ya\n")
+				printNumber(halfPrice(count, armorPrices[a]), 1, '0')
+				printText("gp for ")
+				printText(themOrIt(count))
 			} else {
-				loc_A = 1
-				u4_puts( /*D_4D44*/ "I will give you\n")
-				u4_putl(int32(D_4BDC[loc_B])>>1, 1, '0')
-				u4_puts( /*D_4D55*/ "gp for that ")
-				u4_puts(D_1E98[53+loc_B])
+				printText("I will give you\n")
+				printNumber(halfPrice(1, armorPrices[a]), 1, '0')
+				printText("gp for that ")
+				printText(armorNames[a])
 			}
-			u4_puts( /*D_4D62*/ "\nDeal?\x12\x12\b")
-			loc_C = int(int8(AskY_N()))
-			if loc_C < 'N' {
+			printText("\nDeal?" + answerRoom(2))
+			answer = askYesNo()
+			if answer < 'N' { // a blank or escape
 				break
 			}
-			if loc_C == 'N' {
-				u4_puts( /*D_4D6C*/ "Harumph. What else would\n")
+			if answer == 'N' {
+				printText("Harumph. What else would\n")
 			} else {
-				Party._armors[loc_B] -= uint16(loc_A)
-				shopClamp(&Party._gold, (int32(loc_A)*int32(D_4BDC[loc_B]))>>1, 9999)
-				dspl_Gold()
-				C_48F8(0)
-				u4_puts( /*D_4D86*/ "\nFine! What else?\n")
+				party.armors[a] -= uint16(count)
+				takeGold(halfPrice(count, armorPrices[a]))
+				showGold()
+				showArmour()
+				printText("\nFine! What else?\n")
 			}
 		}
-		if !(loc_C == 'Y' || loc_C == 'N') {
+		if answer != 'Y' && answer != 'N' {
 			break
 		}
 	}
 }
 
-/*SHOP #2 - armor*/
-func SHP_armor() { /*C_D4AE*/
-	var bp_02 int
-
-	Gra_13()
-	C_48F8(0)
-	D_9142 = int16(int(D_4BEC[Party._loc-1]) - 1)
-	u4_puts( /*D_4D99*/ "\n\n\n\nWelcome to\n")
-	u4_puts(D_4BAE[D_9142])
-	u4_puts( /*D_4DA9*/ "\n\n")
-	u4_puts(D_4BB8[D_9142])
-	u4_puts( /*D_4DAC*/ " says: Welcome friend! Want to Buy or Sell? ")
-	bp_02 = shopBuySell()
-	if bp_02 != 0 {
-		u4_putc(bp_02)
-		Gra_CR()
-		if bp_02 == 'b' {
-			C_D1D0()
+func visitArmourShop() {
+	shop := armorShops[findShop(armorShops)]
+	clearStatus()
+	showArmour()
+	printText("\n\n\n\nWelcome to\n")
+	printText(shop.name)
+	printText("\n\n")
+	printText(shop.keeper)
+	printText(" says: Welcome friend! Want to Buy or Sell? ")
+	if choice := askBuyOrSell(); choice != 0 {
+		printChar(choice)
+		newLine()
+		if choice == 'b' {
+			buyArmour(shop.keeper, shop.stock)
 		} else {
-			C_D2F8()
+			buyBackArmour()
 		}
 	}
-	C_4649()
-	Gra_13()
-	dspl_Stats()
-	Gra_CR()
-	u4_puts(D_4BB8[D_9142])
-	u4_puts( /*D_4DD9*/ " says: Good Bye.\n") // the C has a trailing \0 as padding
+	clearStatusTitle()
+	clearStatus()
+	showStats()
+	newLine()
+	printText(shop.keeper)
+	printText(" says: Good Bye.\n")
 }
 
-/*----------------------------------------*/
+// ---- Horses ----
 
-/*SHOP #9 - horses*/
-func SHP_horse() { /*C_D596*/
-	var bp_02 int
+// horsePrice is the price of a horse for each member.
+const horsePrice = 100
 
-	u4_puts( /*D_4DEC*/ "\nWelcome friend! Can I interest thee in horses?\x12\x12\b")
-	bp_02 = AskY_N()
-	if bp_02 != 'Y' {
-		if bp_02 == 'N' {
-			u4_puts( /*D_4E1F*/ "\nA shame, thou looks like thou could use a good horse!\n")
-		}
-		return
-	}
-	u4_puts( /*D_4E57*/ "\nFor only ")
-	u4_putl(int32(Party.f_1d8), 1, '0')
-	u4_puts( /*D_4E62*/ "00g.p. Thou can have the best!  Wilt thou buy?\x12\x12\b")
-	bp_02 = AskY_N()
-	if bp_02 != 'Y' {
-		if bp_02 == 'N' {
-			u4_puts( /*D_4E94*/ "\nA shame, thou looks like thou could use a good horse!\n")
+func visitHorseSeller() {
+	printText("\nWelcome friend! Can I interest thee in horses?" + answerRoom(2))
+	if answer := askYesNo(); answer != 'Y' {
+		if answer == 'N' {
+			printText("\nA shame, thou looks like thou could use a good horse!\n")
 		}
 		return
 	}
-	if 100*Party.f_1d8 > Party._gold {
-		u4_puts( /*D_4ECC*/ "\nIt seems thou hast not gold enough to pay!\n")
+	printText("\nFor only ")
+	printNumber(int32(party.size), 1, '0')
+	printText("00g.p. Thou can have the best!  Wilt thou buy?" + answerRoom(2))
+	if answer := askYesNo(); answer != 'Y' {
+		if answer == 'N' {
+			printText("\nA shame, thou looks like thou could use a good horse!\n")
+		}
 		return
 	}
-	Party._gold -= 100 * Party.f_1d8
-	dspl_Gold()
-	u4_puts( /*D_4EF9*/ "\nHere, a better breed thou shalt not find ever!\n")
-	Party._tile = TIL_14
+	if horsePrice*party.size > party.gold {
+		printText("\nIt seems thou hast not gold enough to pay!\n")
+		return
+	}
+	party.gold -= horsePrice * party.size
+	showGold()
+	printText("\nHere, a better breed thou shalt not find ever!\n")
+	party.tile = tileHorseWest
 }
 
-/*----------------------------------------*/
+// ---- The guilds ----
 
-/*shops indexes*/
-var D_5196 = [16]uint8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0}
-
-/*items prices*/
-var D_51A6 = []int{50, 60, 60, 900}
-
-/*items quantities*/
-var D_51AE = []int{5, 5, 6, 1}
-
-var D_51B6 = []string{
-	/*D_4F2A*/ "Pirate's Guild",
-	/*D_4F39*/ "The Guild Shop",
-}
-var D_51BA = []string{
-	/*D_4F48*/ "One Eyed Willey",
-	/*D_4F58*/ "Long John Leary",
+var guilds = []shopFront{
+	{locBuccaneersDen, "Pirate's Guild", "One Eyed Willey"},
+	{locVesper, "The Guild Shop", "Long John Leary"},
 }
 
-var D_51BE = []string{
-	/*D_4F68*/ "I can give ya 5 long lasting Torches for a mere 50gp.\n",
-	/*D_4F9F*/ "I've got magical mapping Gems, 5 for only 60gp.\n",
-	/*D_4FD0*/ "Magical Keys 1 use each, a fair price at 60gp for 6.\n",
-	/*D_5006*/ "So...Ya want a Sextant...Well I gots one which I might part with fer 900 gold!\n",
+// guildGoods are the guild's goods: torches, gems, keys and (not on the list) a sextant.
+var guildGoods = [4]struct {
+	price, count int
+	pitch        string
+}{
+	{50, 5, "I can give ya 5 long lasting Torches for a mere 50gp.\n"},
+	{60, 5, "I've got magical mapping Gems, 5 for only 60gp.\n"},
+	{60, 6, "Magical Keys 1 use each, a fair price at 60gp for 6.\n"},
+	{900, 1, "So...Ya want a Sextant...Well I gots one which I might part with fer 900 gold!\n"},
 }
 
-/*SHOP #8 - guild*/
-func SHP_guild() { /*C_D61E*/
-	var loc_A int
-	var loc_B int
-	var loc_C *uint16
+// guildStock is the party's stock of guild good g.
+func guildStock(g int) *uint16 {
+	return [...]*uint16{&party.torches, &party.gems, &party.keys, &party.sextants}[g]
+}
 
-	D_9142 = int16(int(D_5196[Party._loc-1]) - 1)
-	Gra_13()
-	C_4987(0)
-	u4_puts( /*D_5056*/ "\n\n\n\nAvast ye mate! Shure ye wishes to buy from ol' ")
-	u4_puts(D_51BA[D_9142])
-	u4_puts( /*D_508A*/ "?\n\n\n")
-	u4_puts(D_51BA[D_9142])
-	u4_puts( /*D_508F*/ " says: Welcome to ")
-	u4_puts(D_51B6[D_9142])
-	u4_puts( /*D_50A2*/ "\nLike to see my goods?\x12\x12\b")
-	for {
-		loc_B = AskY_N()
-		if loc_B != 'Y' {
+func visitGuild() {
+	guild := guilds[findShop(guilds)]
+	clearStatus()
+	showEquipment()
+	printText("\n\n\n\nAvast ye mate! Shure ye wishes to buy from ol' ")
+	printText(guild.keeper)
+	printText("?\n\n\n")
+	printText(guild.keeper)
+	printText(" says: Welcome to ")
+	printText(guild.name)
+	printText("\nLike to see my goods?" + answerRoom(2))
+	for askYesNo() == 'Y' {
+		newLine()
+		printText(guild.keeper)
+		printText(" says: Good Mate! Ya see I gots:\nA-Torches\nB-Magic Gems\nC-Magic Keys\n")
+		g := askLetter("Wat'l it be?"+answerRoom(2), 'A', 'D') - 'A'
+		if g < 0 {
 			break
 		}
-		Gra_CR()
-		u4_puts(D_51BA[D_9142])
-		u4_puts( /*D_50BC*/ " says: Good Mate! Ya see I gots:\nA-Torches\nB-Magic Gems\nC-Magic Keys\n")
-		loc_A = AskLetter( /*D_5102*/ "Wat'l it be?\x12\x12\b", 'A', 'D') - 'A'
-		if loc_A < 0 {
-			break
-		}
-		Gra_CR()
-		u4_puts(D_51BE[loc_A])
-		u4_puts( /*D_5112*/ "\nWill ya buy?\x12\x12\b")
-		loc_B = AskY_N()
-		if loc_B != 'Y' {
-			if loc_B == 'N' {
-				u4_puts( /*D_5123*/ "\nHmmm...Grmbl...\n")
+		goods := guildGoods[g]
+		newLine()
+		printText(goods.pitch)
+		printText("\nWill ya buy?" + answerRoom(2))
+		if answer := askYesNo(); answer != 'Y' {
+			if answer == 'N' {
+				printText("\nHmmm...Grmbl...\n")
 			}
 			break
 		}
-		if Party._gold < uint16(D_51A6[loc_A]) {
-			Gra_13()
-			C_4649()
-			dspl_Stats()
-			u4_puts( /*D_5135*/ "\nWhat? Can't pay! Buzz off swine!\n")
+		if party.gold < uint16(goods.price) {
+			clearStatus()
+			clearStatusTitle()
+			showStats()
+			printText("\nWhat? Can't pay! Buzz off swine!\n")
 			return
 		}
-		switch loc_A {
-		case 0:
-			loc_C = &(Party._torches)
-		case 1:
-			loc_C = &(Party._gems)
-		case 2:
-			loc_C = &(Party._keys)
-		case 3:
-			loc_C = &(Party._sextants)
-		}
-		*loc_C += uint16(D_51AE[loc_A])
-		if *loc_C > 99 {
-			*loc_C = 99
-		}
-		Party._gold -= uint16(D_51A6[loc_A])
-		u4_puts( /*D_5158*/ "\nFine...fine...\n\n")
-		dspl_Gold()
-		C_4987(0)
-		Gra_CR()
-		u4_puts(D_51BA[D_9142])
-		u4_puts( /*D_516A*/ " says: See more?\x12\x12\b")
+		stock := guildStock(g)
+		*stock = min(*stock+uint16(goods.count), maxStock)
+		party.gold -= uint16(goods.price)
+		printText("\nFine...fine...\n\n")
+		showGold()
+		showEquipment()
+		newLine()
+		printText(guild.keeper)
+		printText(" says: See more?" + answerRoom(2))
 	}
-	Gra_13()
-	C_4649()
-	dspl_Stats()
-	Gra_CR()
-	u4_puts(D_51BA[D_9142])
-	u4_puts( /*D_517E*/ " says:  See ya matie!\n")
+	clearStatus()
+	clearStatusTitle()
+	showStats()
+	newLine()
+	printText(guild.keeper)
+	printText(" says:  See ya matie!\n")
 }
 
-/*----------------------------------------*/
+// ---- The inns ----
 
-/*shops indexes*/
-var D_5484 = [16]uint8{0, 0, 0, 0, 1, 2, 3, 0, 4, 5, 6, 0, 0, 0, 7, 0}
-
-var D_5494 = []uint8{0x1C, 0x1D, 0x0A, 0x02, 0x1D, 0x1C, 0x19, 0}
-var D_549C = []uint8{0x06, 0x06, 0x1A, 0x06, 0x02, 0x0B, 0x17, 0}
-var D_54A4 = []uint8{20, 15, 10, 30, 15, 5, 1, 0}
-
-var D_54AC = []string{
-	/*D_51C6*/ "The Honest Inn",
-	/*D_51D5*/ "Britannia Manor",
-	/*D_51E5*/ "The Inn of Ends",
-	/*D_51F5*/ "Wayfarer's Inn",
-	/*D_5204*/ "Honorable Inn",
-	/*D_5212*/ "The Inn of the Spirits",
-	/*D_5229*/ "The Sleep Shop",
+// room is an inn's room: where its bed is, and its price.
+type room struct {
+	x, y  uint8
+	price uint8
 }
 
-var D_54BA = []string{
-	/*D_5238*/ "Scatu",
-	/*D_523E*/ "Jason",
-	/*D_5244*/ "Smirk",
-	/*D_524A*/ "Estro",
-	/*D_5250*/ "Zajac",
-	/*D_5256*/ "Tyrone",
-	/*D_525D*/ "Tymus",
+type inn struct {
+	shopFront
+	offer string
+	room  room
 }
 
-var D_54C8 = []string{
-	/*D_5263*/ "We have a room with 2 beds that rents for 20gp.",
-	/*D_5293*/ "We have a modest sized room with 1 bed for 15gp.",
-	/*D_52C4*/ "We have a very secure room of modest size and 1 bed for 10gp.",
-	/*D_5302*/ "We have three rooms available, a 1, 2 and 3 bed room for 30, 60 and 90gp each.",
-	/*D_5351*/ "We have a single bed room with a back door for 15g.",
-	/*D_5385*/ "Unfortunately, I have but only a very small room with 1 bed: worse yet, it is haunted!  If you do wish to stay it costs 5gp.",
-	/*D_5402*/ "All we have is that cot over there. But it is comfortable, and only 1gp.",
+var inns = []inn{
+	{shopFront{locMoonglow, "The Honest Inn", "Scatu"}, "We have a room with 2 beds that rents for 20gp.", room{28, 6, 20}},
+	{shopFront{locBritain, "Britannia Manor", "Jason"}, "We have a modest sized room with 1 bed for 15gp.", room{29, 6, 15}},
+	{shopFront{locJhelom, "The Inn of Ends", "Smirk"}, "We have a very secure room of modest size and 1 bed for 10gp.", room{10, 26, 10}},
+	{shopFront{locMinoc, "Wayfarer's Inn", "Estro"}, "We have three rooms available, a 1, 2 and 3 bed room for 30, 60 and 90gp each.", room{}},
+	{shopFront{locTrinsic, "Honorable Inn", "Zajac"}, "We have a single bed room with a back door for 15g.", room{29, 2, 15}},
+	{shopFront{locSkaraBrae, "The Inn of the Spirits", "Tyrone"}, "Unfortunately, I have but only a very small room with 1 bed: worse yet, it is haunted!  If you do wish to stay it costs 5gp.", room{28, 11, 5}},
+	{shopFront{locVesper, "The Sleep Shop", "Tymus"}, "All we have is that cot over there. But it is comfortable, and only 1gp.", room{25, 23, 1}},
 }
 
-func C_D7A8() {
-	var bp_02 int
+// minocRooms are the three rooms of Minoc's inn, of one, two and three beds.
+var minocRooms = [3]room{{2, 6, 30}, {2, 2, 60}, {8, 2, 90}}
 
-	u4_puts( /*D_544B*/ "\nIn the middle of the night, while out for a stroll...\n")
-	bp_02 = int(CurMode)
-	CurMode = MOD_COM_CAMP
-	D_9452 = TIL_C8
-	D_96F8 = TIL_C8
-	C_7D92()
-	CurMode = uint16(bp_02)
+// The night at an inn: the healing, and the chance of rogues (one in innAmbushOdds), of
+// Isaac the ghost at Skara Brae (one in ghostOdds) and of the talk of rats.
+const (
+	innHealBase   = 100
+	innHealSteps  = 50 // and up to 49 steps of two more
+	innAmbushOdds = 8
+	ghostOdds     = 4
+	ratsOdds      = 4
+	isaacTalk     = 16 // Isaac's talk record
+	isaacSlot     = 0
+)
+
+// innAmbush: rogues fall on the party in the night.
+func innAmbush() {
+	printText("\nIn the middle of the night, while out for a stroll...\n")
+	mode := gameMode
+	gameMode = modeCombatCamp
+	foeTile = tileRogue
+	encounterTile = tileRogue
+	startInnFight()
+	gameMode = mode
 }
 
-func C_D7D6() {
-	var bp_02 int
-
-	u_delay(1, 0)
-	Party._x = D_913B
-	Party._y = D_913C
-	u_delay(1, 0)
-	for bp_02 = int(Party.f_1d8) - 1; bp_02 >= 0; bp_02-- {
-		if isCharaAlive(bp_02) {
-			Party.chara[bp_02]._stat = 'S'
+// sleepAtInn puts the party to bed in the room and heals it overnight.
+func sleepAtInn(r room) {
+	waitSeconds(1, false)
+	party.x = r.x
+	party.y = r.y
+	waitSeconds(1, false)
+	for m := int(party.size) - 1; m >= 0; m-- {
+		if isAlive(m) {
+			party.members[m].status = statusAsleep
 		}
 	}
-	dspl_Stats()
-	Party._tile = TIL_38
-	u_delay(5, 0)
-	Party._tile = TIL_1F
-	for bp_02 = int(Party.f_1d8) - 1; bp_02 >= 0; bp_02-- {
-		if Party.chara[bp_02]._stat == 'S' {
-			Party.chara[bp_02]._stat = 'G'
-			HP_inc(bp_02, U4_RND3(50)*2+100)
+	showStats()
+	party.tile = tileAsleep
+	waitSeconds(5, false)
+	party.tile = tileOnFoot
+	for m := int(party.size) - 1; m >= 0; m-- {
+		if party.members[m].status == statusAsleep {
+			party.members[m].status = statusGood
+			healMember(m, randomBelow(innHealSteps)*2+innHealBase)
 		}
 	}
-	MP_recover()
-	dspl_Stats()
-	if isCharaAlive(0) && U4_RND1(7) == 0 {
-		C_D7A8()
-	} else if D_9142 == 5 && U4_RND1(3) == 0 {
-		/*Isaac the ghost appears in skara brae*/
-		D_8742._npc._tile[0] = TIL_9C
-		D_8742._npc._gtile[0] = TIL_9C
-		D_8742._npc._x[0] = Party._x - 1
-		D_8742._npc._y[0] = Party._y
-		D_8742._npc._var[0] = 1
-		D_8742._npc._tlkidx[0] = 0x10
+	regainMP()
+	showStats()
+	if isAlive(0) && randomBits(innAmbushOdds-1) == 0 {
+		innAmbush()
+	} else if party.loc == locSkaraBrae && randomBits(ghostOdds-1) == 0 {
+		people := &area.people
+		people.tile[isaacSlot] = tileGhost
+		people.baseTile[isaacSlot] = tileGhost
+		people.x[isaacSlot] = party.x - 1
+		people.y[isaacSlot] = party.y
+		people.behaviour[isaacSlot] = 1
+		people.talkIndex[isaacSlot] = isaacTalk
 	}
-	u4_puts( /*D_54D6*/ "\nMorning!\n")
+	printText("\nMorning!\n")
 }
 
-var D_5672 = []uint8{2, 2, 8, 0}
-var D_5676 = []uint8{6, 2, 2, 0}
-var D_567A = []uint8{30, 60, 90, 0}
-
-/*SHOP #7 - inn*/
-func SHP_inn() { /*C_D8DD*/
-	var bp_02 int
-	var bp_04 int
-
-	if Party._tile != TIL_1F {
-		u4_puts( /*D_54E1*/ "The Innkeeper says: Get that horse out of here!!!\n")
+func visitInn() {
+	if party.tile != tileOnFoot {
+		printText("The Innkeeper says: Get that horse out of here!!!\n")
 		return
 	}
-	u4_puts( /*D_5514*/ "The Innkeeper says: Welcome to ")
-	D_9142 = int16(int(D_5484[Party._loc-1]) - 1)
-	u4_puts(D_54AC[D_9142])
-	u4_puts( /*D_5534*/ "\n\nI am ")
-	u4_puts(D_54BA[D_9142])
-	u4_puts( /*D_553C*/ ".\n\nAre you in need of lodging?\x12\x12\b")
-	bp_04 = AskY_N()
-	if bp_04 == 'Y' {
-		Gra_CR()
-		u4_puts(D_54C8[D_9142])
-		Gra_CR()
-		if D_9142 == 3 {
-			bp_02 = AskLetter( /*D_555E*/ "1, 2 or 3 beds?\x12\x12\b", '1', '3')
-			bp_02 -= '1'
-			if bp_02 < 0 {
-				return
-			}
-			D_913B = D_5672[bp_02]
-			D_913C = D_5676[bp_02]
-			D_913A = D_567A[bp_02]
-		} else {
-			u4_puts( /*D_5571*/ "\nTake it?\x12\x12\b")
-			bp_04 = AskY_N()
-			if bp_04 != 'Y' {
-				if bp_04 == 'N' {
-					u4_puts( /*D_557E*/ "\nYou won't find a better deal in this towne!\n")
-				}
-				return
-			}
-			D_913B = D_5494[D_9142]
-			D_913C = D_549C[D_9142]
-			D_913A = D_54A4[D_9142]
-		}
-		if uint16(D_913A) > Party._gold {
-			u4_puts( /*D_55AC*/ "\nIf you can't pay, you can't stay! Good Bye.\n")
+	printText("The Innkeeper says: Welcome to ")
+	inn := inns[findShop(inns)]
+	printText(inn.name)
+	printText("\n\nI am ")
+	printText(inn.keeper)
+	printText(".\n\nAre you in need of lodging?" + answerRoom(2))
+	if askYesNo() != 'Y' {
+		newLine()
+		printText(inn.keeper)
+		printText(" says: Then you have come to the wrong place! Good Day.\n")
+		return
+	}
+	newLine()
+	printText(inn.offer)
+	newLine()
+	r := inn.room
+	if inn.loc == locMinoc {
+		beds := askLetter("1, 2 or 3 beds?"+answerRoom(2), '1', '3') - '1'
+		if beds < 0 {
 			return
 		}
-		Party._gold -= uint16(D_913A)
-		dspl_Gold()
-		u4_puts( /*D_55DA*/ "\n\nVery good.  Have a pleasant night.\n")
-		if U4_RND1(3) == 0 {
-			u4_puts( /*D_5600*/ "\nOh, and don't mind the strange noises, it's only rats!\n")
-		}
-		C_D7D6()
+		r = minocRooms[beds]
 	} else {
-		Gra_CR()
-		u4_puts(D_54BA[D_9142])
-		u4_puts( /*D_5639*/ " says: Then you have come to the wrong place! Good Day.\n")
-	}
-}
-
-/*----------------------------------------*/
-
-/*shops indexes*/
-var D_5788 = [16]uint8{1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 9, 0, 0, 0, 0, 10}
-
-var D_5798 = []string{
-	/*D_567E*/ "The Royal Healer",
-	/*D_568F*/ "The Truth Healer",
-	/*D_56A0*/ "The Love Healer",
-	/*D_56B0*/ "Courage Healer",
-	/*D_56BF*/ "The Healer",
-	/*D_56CA*/ "Wound Healing",
-	/*D_56D8*/ "Heal and Health",
-	/*D_56E8*/ "Just Healing",
-	/*D_56F5*/ "The Mystic Heal",
-	/*D_5705*/ "The Healer Shop",
-}
-
-var D_57AC = []string{
-	/*D_5715*/ "Pendragon",
-	/*D_571F*/ "Starfire",
-	/*D_5728*/ "Salle'",
-	/*D_572F*/ "Windwalker",
-	/*D_573A*/ "Harmony",
-	/*D_5742*/ "Celest",
-	/*D_5749*/ "Triplet",
-	/*D_5751*/ "Justin",
-	/*D_5758*/ "Spiran",
-	/*D_575F*/ "Quat",
-}
-
-func C_DA05() int {
-	var si int
-
-	Gra_CR()
-	u4_puts(D_57AC[D_9142])
-	u4_puts( /*D_5764*/ " asks:\n")
-	si = AskChara( /*D_576C*/ "Who is in need?\x12\x12\b")
-	if si < 0 {
-		u4_puts( /*D_577F*/ "No one?\n")
-	}
-	return si
-}
-
-func C_DA3E(bp04 int) int {
-	var bp_02 int
-
-	u4_puts( /*D_57C0*/ "\nWilt thou pay?\x12\x12\b")
-	bp_02 = AskY_N()
-	if bp_02 == 'Y' {
-		Party._gold -= uint16(bp04)
-		dspl_Gold()
-		return 1
-	}
-	if bp_02 == 'N' {
-		u4_puts( /*D_57D3*/ "\nThen I cannot aid thee.\n")
-	}
-
-	return 0
-}
-
-func C_DA79(bp04 int) {
-	Gra_09()
-	Gra_11(bp04)
-	sound(9, 0xc0)
-	Gra_11(bp04)
-	Gra_09()
-}
-
-/*Curing*/
-func C_DAA2() {
-	var bp_02 int
-
-	bp_02 = C_DA05()
-	if bp_02 == -1 {
-		return
-	}
-	if Party.chara[bp_02]._stat != 'P' {
-		u4_puts( /*D_57ED*/ "Thou suffers not from Poison!\n")
-		return
-	}
-	u4_puts( /*D_580C*/ "A curing will cost thee 100gp.\n")
-	if Party._gold < 100 {
-		u4_puts( /*D_582C*/ "\nI see by thy purse that thou hast not enough gold.")
-		u_kbflush()
-		u_delay(5, 1)
-		if u_kbhit() != 0 {
-			u_kbread()
-		}
-		u4_puts( /*D_5860*/ "\n\nI will cure thee for free, but give unto others whenever thou may!\n")
-	} else {
-		if C_DA3E(100) == 0 {
+		printText("\nTake it?" + answerRoom(2))
+		if answer := askYesNo(); answer != 'Y' {
+			if answer == 'N' {
+				printText("\nYou won't find a better deal in this towne!\n")
+			}
 			return
 		}
 	}
-	Party.chara[bp_02]._stat = 'G'
-	C_DA79(bp_02)
-	dspl_Stats()
+	if uint16(r.price) > party.gold {
+		printText("\nIf you can't pay, you can't stay! Good Bye.\n")
+		return
+	}
+	party.gold -= uint16(r.price)
+	showGold()
+	printText("\n\nVery good.  Have a pleasant night.\n")
+	if randomBits(ratsOdds-1) == 0 {
+		printText("\nOh, and don't mind the strange noises, it's only rats!\n")
+	}
+	sleepAtInn(r)
 }
 
-/*Healing*/
-func C_DB29() {
-	var bp_02 int
+// ---- The healers ----
 
-	bp_02 = C_DA05()
-	if bp_02 == -1 {
+var healers = []shopFront{
+	{locCastleBritannia, "The Royal Healer", "Pendragon"},
+	{locLycaeum, "The Truth Healer", "Starfire"},
+	{locEmpathAbbey, "The Love Healer", "Salle'"},
+	{locSerpentsHold, "Courage Healer", "Windwalker"},
+	{locMoonglow, "The Healer", "Harmony"},
+	{locBritain, "Wound Healing", "Celest"},
+	{locJhelom, "Heal and Health", "Triplet"},
+	{locYew, "Just Healing", "Justin"},
+	{locSkaraBrae, "The Mystic Heal", "Spiran"},
+	{locCove, "The Healer Shop", "Quat"},
+}
+
+// The healers' prices, and the blood they ask of a leader of at least donorHP.
+const (
+	curePrice        = 100
+	healPrice        = 200
+	resurrectPrice   = 300
+	donorHP          = 400
+	bloodGiven       = 100
+	bloodKarma       = 5
+	healerSoundPitch = 192
+)
+
+// askPatient asks who needs help; -1 for no one.
+func askPatient(healer shopFront) int {
+	newLine()
+	printText(healer.keeper)
+	printText(" asks:\n")
+	m := askMember("Who is in need?" + answerRoom(2))
+	if m < 0 {
+		printText("No one?\n")
+	}
+	return m
+}
+
+// payHealer asks the party to pay the price; true if it did.
+func payHealer(price int) bool {
+	printText("\nWilt thou pay?" + answerRoom(2))
+	switch askYesNo() {
+	case 'Y':
+		party.gold -= uint16(price)
+		showGold()
+		return true
+	case 'N':
+		printText("\nThen I cannot aid thee.\n")
+	}
+	return false
+}
+
+// healerGlow flashes the map and the patient's status line.
+func healerGlow(m int) {
+	invertMap()
+	invertStatusLine(m)
+	sound(soundSweep, healerSoundPitch)
+	invertStatusLine(m)
+	invertMap()
+}
+
+func sayPurseTooLight() {
+	printText("\nI see by thy purse that thou hast not enough gold. I cannot aid thee.\n")
+}
+
+func cure(healer shopFront) {
+	m := askPatient(healer)
+	if m == -1 {
 		return
 	}
-	if Party.chara[bp_02]._HP[0] == Party.chara[bp_02]._HP[1] {
-		u4_puts( /*D_58A6*/ "Thou art already quite healthy!\n")
+	if party.members[m].status != statusPoisoned {
+		printText("Thou suffers not from Poison!\n")
 		return
 	}
-	u4_puts( /*D_58C7*/ "\nA healing will cost thee 200gp.\n")
-	if Party._gold < 200 {
-		u4_puts( /*D_58E9*/ "\nI see by thy purse that thou hast not enough gold. I cannot aid thee.\n")
+	printText("A curing will cost thee 100gp.\n")
+	if party.gold < curePrice {
+		printText("\nI see by thy purse that thou hast not enough gold.")
+		flushKeys()
+		waitSeconds(5, true)
+		if keyWaiting() {
+			readKey()
+		}
+		printText("\n\nI will cure thee for free, but give unto others whenever thou may!\n")
+	} else if !payHealer(curePrice) {
 		return
 	}
-	if C_DA3E(200) != 0 {
-		Party.chara[bp_02]._HP[0] = Party.chara[bp_02]._HP[1]
-		C_DA79(bp_02)
-		dspl_Stats()
+	party.members[m].status = statusGood
+	healerGlow(m)
+	showStats()
+}
+
+func heal(healer shopFront) {
+	m := askPatient(healer)
+	if m == -1 {
+		return
+	}
+	if party.members[m].hp == party.members[m].maxHP {
+		printText("Thou art already quite healthy!\n")
+		return
+	}
+	printText("\nA healing will cost thee 200gp.\n")
+	if party.gold < healPrice {
+		sayPurseTooLight()
+		return
+	}
+	if payHealer(healPrice) {
+		party.members[m].hp = party.members[m].maxHP
+		healerGlow(m)
+		showStats()
 	}
 }
 
-/*Resurrection*/
-func C_DB93() {
-	var bp_02 int
-
-	bp_02 = C_DA05()
-	if bp_02 == -1 {
+func resurrect(healer shopFront) {
+	m := askPatient(healer)
+	if m == -1 {
 		return
 	}
-	if Party.chara[bp_02]._stat != 'D' {
-		u4_puts( /*D_5931*/ "Thou art not dead fool!\n")
+	if party.members[m].status != statusDead {
+		printText("Thou art not dead fool!\n")
 		return
 	}
-	u4_puts( /*D_594A*/ "Resurrection will cost thee 300gp.\n")
-	if Party._gold < 300 {
-		u4_puts( /*D_596E*/ "\nI see by thy purse that thou hast not enough gold. I cannot aid thee.\n")
+	printText("Resurrection will cost thee 300gp.\n")
+	if party.gold < resurrectPrice {
+		sayPurseTooLight()
 		return
 	}
-	if C_DA3E(300) != 0 {
-		Party.chara[bp_02]._stat = 'G'
-		C_DA79(bp_02)
-		dspl_Stats()
+	if payHealer(resurrectPrice) {
+		party.members[m].status = statusGood
+		healerGlow(m)
+		showStats()
 	}
 }
 
-/*blood donation*/
-func C_DBF5() {
-	var bp_04 int
-
-	u4_puts( /*D_59B6*/ "Art thou willing to give 100pts of thy blood to aid others?\x12\x12\b")
-	bp_04 = AskY_N()
-	if bp_04 == 'Y' {
-		karma_inc(&(Party._sacri), 5)
-		u4_puts( /*D_59F5*/ "Thou art a great help.  We are in dire need!\n")
-		Party.chara[0]._HP[0] -= 100
-		dspl_Stats()
-		u_delay(1, 0)
-	} else if bp_04 == 'N' {
-		karma_dec(&(Party._sacri), 5)
-		dspl_Stats()
+// askForBlood: the healer asks a strong leader for blood, for sacrifice.
+func askForBlood() {
+	printText("Art thou willing to give 100pts of thy blood to aid others?" + answerRoom(2))
+	switch askYesNo() {
+	case 'Y':
+		raiseKarma(&party.karmaSacrifice, bloodKarma)
+		printText("Thou art a great help.  We are in dire need!\n")
+		party.members[0].hp -= bloodGiven
+		showStats()
+		waitSeconds(1, false)
+	case 'N':
+		lowerKarma(&party.karmaSacrifice, bloodKarma)
+		showStats()
 	}
 }
 
-/*SHOP #6 - healer*/
-func SHP_healer() { /*C_DC4D*/
-	var bp_02 int
-
-	D_9142 = int16(int(D_5788[Party._loc-1]) - 1)
-	u4_puts( /*D_5A23*/ "Welcome unto\n")
-	u4_puts(D_5798[D_9142])
-	Gra_CR()
-	u4_puts(D_57AC[D_9142])
-	u4_puts( /*D_5A31*/ " says: Peace and Joy be with you friend. Are you in need of help?\x12\x12\b")
-	for AskY_N() == 'Y' {
-		Gra_CR()
-		u4_puts(D_57AC[D_9142])
-		u4_puts( /*D_5A76*/ " says: We can perform:\nA-Curing\nB-Healing\nC-Resurrection\n")
-		bp_02 = AskLetter( /*D_5AB0*/ "Your need:\x12\x12\b", 'A', 'C')
-		if bp_02 < 'A' {
+func visitHealer() {
+	healer := healers[findShop(healers)]
+	printText("Welcome unto\n")
+	printText(healer.name)
+	newLine()
+	printText(healer.keeper)
+	printText(" says: Peace and Joy be with you friend. Are you in need of help?" + answerRoom(2))
+	for askYesNo() == 'Y' {
+		newLine()
+		printText(healer.keeper)
+		printText(" says: We can perform:\nA-Curing\nB-Healing\nC-Resurrection\n")
+		need := askLetter("Your need:"+answerRoom(2), 'A', 'C')
+		if need < 'A' {
 			break
 		}
-		switch int8(bp_02) {
+		switch need {
 		case 'A':
-			C_DAA2()
+			cure(healer)
 		case 'B':
-			C_DB29()
+			heal(healer)
 		case 'C':
-			C_DB93()
+			resurrect(healer)
 		}
-		Gra_CR()
-		u4_puts(D_57AC[D_9142])
-		u4_puts( /*D_5ABE*/ " asks: Do you need more help?\x12\x12\b")
+		newLine()
+		printText(healer.keeper)
+		printText(" asks: Do you need more help?" + answerRoom(2))
 	}
-	if Party.chara[0]._HP[0] >= 400 {
-		C_DBF5()
+	if party.members[0].hp >= donorHP {
+		askForBlood()
 	}
-	dspl_Stats()
-	Gra_CR()
-	u4_puts(D_57AC[D_9142])
-	u4_puts( /*D_5ADF*/ " says: May thy life be guarded by the powers of good.\n")
+	showStats()
+	newLine()
+	printText(healer.keeper)
+	printText(" says: May thy life be guarded by the powers of good.\n")
 }
 
-/*----------------------------------------*/
+// ---- The pubs ----
 
-/*shops indexes*/
-var D_5EE8 = [16]uint8{0, 0, 0, 0, 0, 1, 2, 0, 0, 3, 0, 0, 4, 5, 6, 0}
-
-var D_5EF8 = []int{20, 30, 10, 40, 99, 25}
-
-var D_5F04 = []string{
-	/*D_5B16*/ "Jolly Spirits",
-	/*D_5B24*/ "The Bloody Pub",
-	/*D_5B33*/ "The Keg Tap",
-	/*D_5B3F*/ "Folley Tavern",
-	/*D_5B4D*/ "Captain Black Tavern",
-	/*D_5B62*/ "Axe 'n Ale",
+type pub struct {
+	shopFront
+	dish      string
+	dishPrice int
 }
 
-var D_5F10 = []string{
-	/*D_5B6D*/ "Sam",
-	/*D_5B71*/ "Celestial",
-	/*D_5B7B*/ "Terran",
-	/*D_5B82*/ "Greg 'n Rob",
-	/*D_5B8E*/ "The Cap'n",
-	/*D_5B98*/ "Arron",
+var pubs = []pub{
+	{shopFront{locBritain, "Jolly Spirits", "Sam"}, "Lamb Chops", 4},
+	{shopFront{locJhelom, "The Bloody Pub", "Celestial"}, "Dragon Tartar", 2},
+	{shopFront{locTrinsic, "The Keg Tap", "Terran"}, "Brown Beans", 3},
+	{shopFront{locPaws, "Folley Tavern", "Greg 'n Rob"}, "Folley Filet", 2},
+	{shopFront{locBuccaneersDen, "Captain Black Tavern", "The Cap'n"}, "Dog Meat Pie", 4},
+	{shopFront{locVesper, "Axe 'n Ale", "Arron"}, "Green Granukit", 2},
 }
 
-var D_5F1C = []string{
-	/*D_5B9E*/ "Lamb Chops",
-	/*D_5BA9*/ "Dragon Tartar",
-	/*D_5BB7*/ "Brown Beans",
-	/*D_5BC3*/ "Folley Filet",
-	/*D_5BD0*/ "Dog Meat Pie",
-	/*D_5BDD*/ "Green Granukit",
+// pubTopics are what a tipped barkeep knows of, with the tip each wants. A pub knows only
+// the topics from its own number in the list of pubs on.
+var pubTopics = []struct {
+	word string
+	tip  int
+	tale string
+}{
+	{"black stone", 20, "Ah, the Black Stone.  Yes I've heard of it. But, the only one who knows where it lies is the wizard Merlin.\n"},
+	{"sextant", 30, "For navigation a Sextant is vital...  Ask for item \"D\" in the Guild shops!\n"},
+	{"white stone", 10, "Hmmm, Now let me see... Yes, it was the old Hermit... Sloven!  He is tough to find, lives near Lock Lake I hear.\n"},
+	{"mandrake", 40, "The last person I knew that had any Mandrake was an old alchemist named Calumny.\n"},
+	{"skull", 99, "If thou must know of that evilest of all things... find the beggar Jude.  He is very very poor!\n"},
+	{"nightshade", 25, "Of Nightshade I know but this... Seek out Virgil or thou shalt miss! Try in Trinsic!\n"},
+	{"mandrake root", 0, ""}, // asked as "mandrake"
 }
 
-var D_5F28 = []int{4, 2, 3, 2, 4, 2}
+// mandrakeRoot is asked as the last word, and answered as "mandrake".
+const (
+	topicMandrake     = 3
+	topicMandrakeRoot = 6
+)
 
-var D_5F34 = []string{
-	/*D_5BEC*/ "black stone",
-	/*D_5BF8*/ "sextant",
-	/*D_5C00*/ "white stone",
-	/*D_5C0C*/ "mandrake",
-	/*D_5C15*/ "skull",
-	/*D_5C1B*/ "nightshade",
-	/*D_5C26*/ "mandrake root",
-}
+// The ale: a mug costs alePrice; three mugs are the limit, and a tip above the price
+// buys a question.
+const (
+	alePrice  = 2
+	maxDrinks = 3
+)
 
-var D_5F42 = []string{
-	/*D_5C34*/ "Ah, the Black Stone.  Yes I've heard of it. But, the only one who knows where it lies is the wizard Merlin.\n",
-	/*D_5CA1*/ "For navigation a Sextant is vital...  Ask for item \"D\" in the Guild shops!\n",
-	/*D_5CED*/ "Hmmm, Now let me see... Yes, it was the old Hermit... Sloven!  He is tough to find, lives near Lock Lake I hear.\n",
-	/*D_5D5F*/ "The last person I knew that had any Mandrake was an old alchemist named Calumny.\n",
-	/*D_5DB1*/ "If thou must know of that evilest of all things... find the beggar Jude.  He is very very poor!\n",
-	/*D_5E12*/ "Of Nightshade I know but this... Seek out Virgil or thou shalt miss! Try in Trinsic!\n",
-}
+var drinksServed int
 
-/*pub food*/
-func C_DD24() int {
-	var bp_02, bp_04 int
-
-	u4_puts( /*D_5E68*/ "Our specialty is ")
-	u4_puts(D_5F1C[D_9142])
-	u4_puts( /*D_5E7A*/ ", which costs ")
-	u4_putl(int32(D_5F28[D_9142]), 1, '0')
-	u4_puts( /*D_5E89*/ "gp.  How many plates would you like?\x12\x12\x12\b\b")
-	bp_02 = s16(int(AskInt(2)))
-	if bp_02 <= 0 {
-		if bp_02 < 0 {
-			sound(1)
+// orderFood sells plates of the pub's dish, a ration each; true to leave.
+func orderFood(p pub) bool {
+	printText("Our specialty is ")
+	printText(p.dish)
+	printText(", which costs ")
+	printNumber(int32(p.dishPrice), 1, '0')
+	printText("gp.  How many plates would you like?" + answerRoom(3))
+	plates := askAmount(2)
+	if plates <= 0 {
+		if plates < 0 {
+			sound(soundBeep)
 		}
-		return 1
+		return true
 	}
-	bp_04 = 0
-	for bp_02 != 0 {
-		if Party._gold >= uint16(D_5F28[D_9142]) {
-			Party._gold -= uint16(D_5F28[D_9142])
-			if Party._food+100 > 999900 {
-				Party._food = 999900
-			} else {
-				Party._food = Party._food + 100
+	for served := 0; plates != 0; served++ {
+		if party.gold < uint16(p.dishPrice) {
+			if served == 0 {
+				printText("\nYa cannot afford any!\n")
+				return true
 			}
-			dspl_Stats()
-			bp_02--
-			bp_04++
-		} else {
-			if bp_04 == 0 {
-				u4_puts( /*D_5EB3*/ "\nYa cannot afford any!\n")
-				return 1
+			printText("\nYa can only afford ")
+			printNumber(int32(served), 1, '0')
+			printText(" plate")
+			if served != 1 {
+				printChar('s')
 			}
-			u4_puts( /*D_5ECB*/ "\nYa can only afford ")
-			u4_putl(int32(bp_04), 1, '0')
-			u4_puts( /*D_5EE0*/ " plate")
-			if bp_04 != 1 {
-				u4_putc('s')
-			}
-			u4_putc('.')
-			Gra_CR()
+			printChar('.')
+			newLine()
 			break
 		}
+		party.gold -= uint16(p.dishPrice)
+		party.food = min(party.food+ration, maxFood)
+		showStats()
+		plates--
 	}
-
-	return 0
+	return false
 }
 
-/*pub ale*/
-func C_DE35() int {
-	var loc_A int
-	var loc_B int
-	var loc_C int
-	var loc_D [16]byte
-	var loc_E int
-
-	if D_913E == 3 {
-		Gra_CR()
-		u4_puts(D_5F10[D_9142])
-		u4_puts( /*D_5F4E*/ " says: Sorry, you seem to have too many.  Bye!\n")
-		return 1
+// orderAle sells a mug of ale, and with a tip a tale; true to leave.
+func orderAle(pubNumber int, p pub) bool {
+	if drinksServed == maxDrinks {
+		newLine()
+		printText(p.keeper)
+		printText(" says: Sorry, you seem to have too many.  Bye!\n")
+		return true
 	}
-	D_913E++
-	u4_puts( /*D_5F7E*/ "\nHere's a mug of our best. That'll be 2gp. You pay?\x12\x12\x12\b\b")
-	loc_A = s16(int(AskInt(2)))
-	if loc_A <= 0 {
-		if loc_A < 0 {
-			sound(1)
+	drinksServed++
+	printText("\nHere's a mug of our best. That'll be 2gp. You pay?" + answerRoom(3))
+	paid := askAmount(2)
+	if paid <= 0 {
+		if paid < 0 {
+			sound(soundBeep)
 		}
-		return 1
+		return true
 	}
-	if loc_A < 2 {
-		u4_puts( /*D_5FB7*/ "\nWon't pay, eh. Ya scum, be gone fore ey call the guards!\n")
-		return 1
+	if paid < alePrice {
+		printText("\nWon't pay, eh. Ya scum, be gone fore ey call the guards!\n")
+		return true
 	}
-	if Party._gold < uint16(loc_A) {
-		u4_puts( /*D_5FF2*/ "\nIt seems that you have not the gold. Good Day!\n")
-		return 1
+	if party.gold < uint16(paid) {
+		printText("\nIt seems that you have not the gold. Good Day!\n")
+		return true
 	}
-	Party._gold -= uint16(loc_A)
-	dspl_Gold()
-	if loc_A >= 3 {
-		u4_puts( /*D_6023*/ "\nWhat'd ya like to know friend?\n")
-		u4_gets(loc_D[:], 15)
-		for loc_C = 6; loc_C >= 0; loc_C-- {
-			if strnicmp(loc_D[:], D_5F34[loc_C], 16) == 0 {
-				break
-			}
-		}
-		if loc_C == 6 {
-			loc_C = 3
-		}
-		if loc_C < int(D_9142) {
-			u4_puts( /*D_6044*/ "\n'fraid I can't help ya there friend!\n")
-		} else {
-			for D_5EF8[loc_C] > loc_A {
-				u4_puts( /*D_606B*/ "\nThat subject is a bit foggy, perhaps more gold will refresh my memory. You give:\x12\x12\x12\b\b")
-				loc_E = s16(int(AskInt(2)))
-				if loc_E <= 0 {
-					if loc_A < 0 { // QUIRK: the C tests loc_A (never negative here), not loc_E
-						sound(1)
-					} else {
-						u4_puts( /*D_60C2*/ "\nSorry, I could not hep ya mate!\n")
-					}
-					return 1
-				}
-				if Party._gold < uint16(loc_E) {
-					u4_puts( /*D_60E4*/ "\nYer don't have that mate!\n")
-					u4_puts( /*D_6100*/ "\nSorry, I could not hep ya mate!\n")
-					return 1
-				}
-				Party._gold -= uint16(loc_E)
-				dspl_Gold()
-				loc_A = s16(loc_A + loc_E)
-			}
-			if D_5EF8[loc_C] <= loc_A {
-				Gra_CR()
-				u4_puts(D_5F10[D_9142])
-				u4_puts( /*D_6122*/ " says: ")
-				u4_puts(D_5F42[loc_C])
-				Gra_CR()
-			}
-		}
+	party.gold -= uint16(paid)
+	showGold()
+	if paid > alePrice && askBarkeep(pubNumber, p, paid) {
+		return true
 	}
-	u4_puts( /*D_612A*/ "\nAnythin' else?\x12\x12\b")
-	loc_B = AskY_N()
-	if loc_B != 'Y' {
-		return 1
-	}
-	return 0
+	printText("\nAnythin' else?" + answerRoom(2))
+	return askYesNo() != 'Y'
 }
 
-/*SHOP #4 - pub*/
-func SHP_pub() { /*C_DFAF*/
-	var bp_02 int
+// askBarkeep: a tipped barkeep tells what they know; true to leave.
+func askBarkeep(pubNumber int, p pub, paid int) bool {
+	printText("\nWhat'd ya like to know friend?\n")
+	asked := readWord(14)
+	topic := len(pubTopics) - 1
+	for topic >= 0 && !strings.EqualFold(asked, pubTopics[topic].word) {
+		topic--
+	}
+	if topic == topicMandrakeRoot {
+		topic = topicMandrake
+	}
+	if topic < pubNumber {
+		printText("\n'fraid I can't help ya there friend!\n")
+		return false
+	}
+	for pubTopics[topic].tip > paid {
+		printText("\nThat subject is a bit foggy, perhaps more gold will refresh my memory. You give:" + answerRoom(3))
+		more := askAmount(2)
+		if more <= 0 {
+			// Quirk: the original tests the first payment (never negative here), so no bell.
+			printText("\nSorry, I could not hep ya mate!\n")
+			return true
+		}
+		if party.gold < uint16(more) {
+			printText("\nYer don't have that mate!\n")
+			printText("\nSorry, I could not hep ya mate!\n")
+			return true
+		}
+		party.gold -= uint16(more)
+		showGold()
+		paid += more
+	}
+	newLine()
+	printText(p.keeper)
+	printText(" says: ")
+	printText(pubTopics[topic].tale)
+	newLine()
+	return false
+}
 
-	D_913E = 0
-	D_9142 = int16(int(D_5EE8[Party._loc-1]) - 1)
-	Gra_CR()
-	u4_puts(D_5F10[D_9142])
-	u4_puts( /*D_613D*/ " says:\nWelcome to ")
-	u4_puts(D_5F04[D_9142])
-	Gra_CR()
+func visitPub() {
+	drinksServed = 0
+	number := findShop(pubs)
+	p := pubs[number]
+	newLine()
+	printText(p.keeper)
+	printText(" says:\nWelcome to ")
+	printText(p.name)
+	newLine()
 	for {
-		u4_puts(D_5F10[D_9142])
-		u4_puts( /*D_6150*/ " says: What'll it be, Food er Ale?\x12\x12\b")
-		for { /*C_E004*/
-			askKeys("", item("Food", key('f')), item("Ale", key('a')), item("Leave", KBD_ESC))
-			bp_02 = int(int8(u_kbread()))
-			u4_toupper(&bp_02)
-			if bp_02 == ' ' || bp_02 == 0x1b || bp_02 == '\r' {
-				Gra_CR()
+		printText(p.keeper)
+		printText(" says: What'll it be, Food er Ale?" + answerRoom(2))
+		var order int
+		for {
+			askKeys("", item("Food", key('f')), item("Ale", key('a')), item("Leave", keyEsc))
+			order = int(int8(readKey()))
+			if order >= 'a' && order <= 'z' {
+				order -= 'a' - 'A'
+			}
+			if order == ' ' || order == 27 || order == '\r' {
+				newLine()
 				return
 			}
-			if bp_02 != 'F' && bp_02 != 'A' {
-				sound(1)
-				continue
+			if order == 'F' || order == 'A' {
+				break
 			}
+			sound(soundBeep)
+		}
+		printChar(order)
+		newLine()
+		leave := false
+		if order == 'F' {
+			leave = orderFood(p)
+		} else {
+			leave = orderAle(number, p)
+		}
+		if leave {
 			break
 		}
-		u4_putc(bp_02)
-		Gra_CR()
-		if bp_02 == 'F' {
-			if C_DD24() != 0 {
-				break
-			}
-		} else {
-			if C_DE35() != 0 {
-				break
-			}
-		}
-		dspl_Stats()
-		u4_puts( /*D_6176*/ "Here ye arr. Somethin' else?\x12\x12\b")
-		bp_02 = AskY_N()
-		if bp_02 != 'Y' {
+		showStats()
+		printText("Here ye arr. Somethin' else?" + answerRoom(2))
+		if askYesNo() != 'Y' {
 			break
 		}
 	}
-	u4_puts( /*D_6196*/ "See ya mate!\n")
+	printText("See ya mate!\n")
 }
 
-/*----------------------------------------*/
+// ---- Food ----
 
-/*shops indexes*/
-var D_636C = [16]uint8{0, 0, 0, 0, 1, 2, 0, 3, 0, 0, 4, 0, 5, 0, 0, 0}
-
-var D_637C = []int{25, 40, 35, 20, 30}
-
-var D_6386 = []string{
-	/*D_61A4*/ "The Sage Deli",
-	/*D_61B2*/ "Adventure Food",
-	/*D_61C1*/ "The Dry Goods",
-	/*D_61CF*/ "Food for Thought",
-	/*D_61E0*/ "The Market",
+type foodShop struct {
+	shopFront
+	packPrice int
 }
 
-var D_6390 = []string{
-	/*D_61EB*/ "Shaman",
-	/*D_61F2*/ "Windrick",
-	/*D_61FB*/ "Donnar",
-	/*D_6102*/ "Mintol",
-	/*D_6109*/ "Max",
+var foodShops = []foodShop{
+	{shopFront{locMoonglow, "The Sage Deli", "Shaman"}, 25},
+	{shopFront{locBritain, "Adventure Food", "Windrick"}, 40},
+	{shopFront{locYew, "The Dry Goods", "Donnar"}, 35},
+	{shopFront{locSkaraBrae, "Food for Thought", "Mintol"}, 20},
+	{shopFront{locPaws, "The Market", "Max"}, 30},
 }
 
-/*SHOP #3 - food*/
-func SHP_food() { /*C_E088*/
-	var bp_02 int // char
-	var bp_04 int // char
+// pack is a pack of 25 rations.
+const pack = 25 * ration
 
-	D_9142 = int16(int(D_636C[Party._loc-1]) - 1)
-	u4_puts( /*D_620D*/ "\n\n\n\nWelcome to ")
-	u4_puts(D_6386[D_9142])
-	u4_puts( /*D_621D*/ "\n\n")
-	u4_puts(D_6390[D_9142])
-	u4_puts( /*D_6220*/ " says: Good day, and Welcome friend.\n\nMay I interest you in some rations?\x12\x12\b")
-	bp_04 = AskY_N()
-	if bp_04 != 'Y' {
-		if bp_04 == 'N' {
-			u4_puts( /*D_626D*/ "Goodbye, Come again!\n")
+func visitFoodShop() {
+	shop := foodShops[findShop(foodShops)]
+	printText("\n\n\n\nWelcome to ")
+	printText(shop.name)
+	printText("\n\n")
+	printText(shop.keeper)
+	printText(" says: Good day, and Welcome friend.\n\nMay I interest you in some rations?" + answerRoom(2))
+	if answer := askYesNo(); answer != 'Y' {
+		if answer == 'N' {
+			printText("Goodbye, Come again!\n")
 		}
 		return
 	}
-	u4_puts( /*D_6283*/ "We have the best adventure rations, 25 for only ")
-	u4_putl(int32(D_637C[D_9142]), 1, '0')
-	u4_puts( /*D_62B4*/ "gp.")
+	printText("We have the best adventure rations, 25 for only ")
+	printNumber(int32(shop.packPrice), 1, '0')
+	printText("gp.")
 	for {
-		u4_puts( /*D_62B8*/ "\nHow many packs of 25 would you like?\x12\x12\x12\x12\b\b\b")
-		bp_02 = int(int8(AskInt(3))) // QUIRK: stored in a char, 128+ packs wrap
-		if bp_02 <= 0 {
-			u4_puts( /*D_62E5*/ "\nToo bad. Maybe next time.\n")
-			bp_04 = 'N'
-		} else if uint16(s16(D_637C[D_9142]*bp_02)) > Party._gold {
-			if uint16(D_637C[D_9142]) > Party._gold {
-				u4_puts( /*D_6301*/ "You cannot afford any!\n")
-				break
+		printText("\nHow many packs of 25 would you like?" + answerRoom(4))
+		packs := int(int8(askAmount(3))) // quirk: kept in a byte, so 128 packs and more wrap
+		answer := 'N'
+		switch {
+		case packs <= 0:
+			printText("\nToo bad. Maybe next time.\n")
+		case uint16(shop.packPrice*packs) > party.gold:
+			if uint16(shop.packPrice) > party.gold {
+				printText("You cannot afford any!\n")
+				printText("\nGoodbye. Come again!\n")
+				return
 			}
-			u4_puts( /*D_6319*/ "You can only afford ")
-			u4_putl(int32(Party._gold)/int32(D_637C[D_9142]), 1, '0')
-			u4_puts( /*D_632E*/ " packs.\n")
-			bp_04 = 'Y'
-		} else {
-			Party._food += 2500 * int32(bp_02)
-			if Party._food > 999900 {
-				Party._food = 999900
-			}
-			Party._gold -= uint16(D_637C[D_9142] * bp_02)
-			dspl_Stats()
-			u4_puts( /*D_6337*/ "\nThank you. Anything else?\x12\x12\b")
-			bp_04 = AskY_N()
+			printText("You can only afford ")
+			printNumber(int32(party.gold)/int32(shop.packPrice), 1, '0')
+			printText(" packs.\n")
+			answer = 'Y'
+		default:
+			party.food = min(party.food+pack*int32(packs), maxFood)
+			party.gold -= uint16(shop.packPrice * packs)
+			showStats()
+			printText("\nThank you. Anything else?" + answerRoom(2))
+			answer = rune(askYesNo())
 		}
-		if bp_04 != 'Y' {
+		if answer != 'Y' {
 			break
 		}
 	}
-	u4_puts( /*D_6355*/ "\nGoodbye. Come again!\n")
+	printText("\nGoodbye. Come again!\n")
 }

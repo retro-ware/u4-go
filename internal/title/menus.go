@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"strings"
 
+	"github.com/memmaker/u4-go/internal/ega"
 	"github.com/memmaker/u4-go/internal/host"
 )
 
@@ -32,7 +33,7 @@ func item(label string, c byte) host.MenuItem {
 }
 
 func setHooks() {
-	host.Glyphs = func() [][64]byte { return drv.Glyphs[:] }
+	host.Glyphs = func() [][64]byte { return screen.Glyphs[:] }
 	host.MapClick = nil
 	host.PromptMenu = func(bool) *host.Menu {
 		switch asking {
@@ -45,9 +46,9 @@ func setHooks() {
 	}
 	host.BackKey = func() uint16 {
 		if asking == askName {
-			return KBD_ENTER // an empty name goes back to the menu
+			return keyEnter // an empty name goes back to the menu
 		}
-		return 0x011b
+		return keyEscape
 	}
 	host.Hover = func(x, y int) {
 		if k := answerAt(x, y); asking == askGypsy && k >= 0 && k != answerSel {
@@ -57,11 +58,11 @@ func setHooks() {
 	}
 	host.ScreenClick = func(x, y int) ([]uint16, bool) {
 		if k := answerAt(x, y); asking == askGypsy && k >= 0 {
-			return []uint16{[]uint16{KBD_A, KBD_B}[k]}, true
+			return []uint16{[]uint16{keyA, keyB}[k]}, true
 		}
-		// the main menu's lines, rows 17..19 between columns 11 and 28
-		if row := y / 8; asking == askMain && row >= 17 && row <= 19 && x/8 >= 11 && x/8 < 29 {
-			return []uint16{[]uint16{KBD_R, KBD_J, KBD_I}[row-17]}, true
+		// the main menu's lines
+		if row, col := y/cellSize, x/cellSize; asking == askMain && row >= menuFirstRow && row < menuFirstRow+menuItems && col >= menuCol && col < menuEndCol {
+			return []uint16{uint16(menuKeys[row-menuFirstRow])}, true
 		}
 		return nil, false
 	}
@@ -70,21 +71,19 @@ func setHooks() {
 // The gypsy's answers are picked in her text: "A) ..." and "B) ..." are drawn in gray, the
 // selected one bright; the arrows switch, Enter takes it, the mouse points and clicks.
 
-const textRow0 = 19 // the text area's first row
-
 var (
-	textCells   [25][40]byte // what the title printed where
-	answers     [2][2]int    // each answer's first and last cell, counted from textRow0
-	answerSel   int          // the selected answer
-	answerFound bool         // the question shows both answers
-	// answerImg recolours the answers over the text area (rows textRow0..24)
-	answerImg = image.NewRGBA(image.Rect(0, 0, 320, 200-textRow0*8))
+	textCells   [textRows][textCols]byte // what the title printed where
+	answers     [2][2]int                // each answer's first and last cell, counted from textTop
+	answerSel   int                      // the selected answer
+	answerFound bool                     // the question shows both answers
+	// answerImg recolours the answers over the text area (rows textTop..24)
+	answerImg = image.NewRGBA(image.Rect(0, 0, ega.W, ega.H-textTop*cellSize))
 )
 
 // findAnswers locates "A) ..." and "B) ..." in the text area.
 func findAnswers() {
 	var b strings.Builder
-	for _, row := range textCells[textRow0:] {
+	for _, row := range textCells[textTop:] {
 		for _, c := range row {
 			b.WriteByte(max(c, ' '))
 		}
@@ -103,20 +102,20 @@ func findAnswers() {
 			return
 		}
 	}
-	frame.Overlays = append(frame.Overlays, host.Overlay{Y: textRow0 * 8, Img: answerImg})
+	frame.Overlays = append(frame.Overlays, host.Overlay{Y: textTop * cellSize, Img: answerImg})
 }
 
-// forCell calls f with each pixel (x, y) of text cell i, y counted from textRow0.
+// forCell calls f with each pixel (x, y) of text cell i, y counted from textTop.
 func forCell(i int, f func(x, y int)) {
-	x0, y0 := i%40*8, i/40*8
-	for r := 0; r < 8; r++ {
-		for k := 0; k < 8; k++ {
+	x0, y0 := i%textCols*cellSize, i/textCols*cellSize
+	for r := 0; r < cellSize; r++ {
+		for k := 0; k < cellSize; k++ {
 			f(x0+k, y0+r)
 		}
 	}
 }
 
-// clearAnswers takes the recolouring away (Gra_5).
+// clearAnswers takes the recolouring away (clearTextArea).
 func clearAnswers() {
 	clear(answerImg.Pix)
 	answerFound = false
@@ -135,10 +134,14 @@ func drawAnswers() {
 		}
 		for i := a[0]; i <= a[1]; i++ {
 			forCell(i, func(x, y int) {
-				if v := frame.Pix[(textRow0*8+y)*host.ScreenW+x]; v != 0 {
+				if v := frame.Pix[(textTop*cellSize+y)*host.ScreenW+x]; v != 0 {
 					// tint the glyph's own colour, keeping the font's shading
 					p := frame.Palette[int(v)*3:]
-					t := func(i int, k uint8) uint8 { l := int(p[i]&63)<<2 | int(p[i]&63)>>4; return uint8(l * int(k) / 255) }
+					// the palette is 6-bit VGA levels: widen to 8 bits, then tint
+					t := func(i int, k uint8) uint8 {
+						v := int(p[i] % 64)
+						return uint8((v<<2 | v>>4) * int(k) / 255)
+					}
 					answerImg.SetRGBA(x, y, color.RGBA{t(0, c.R), t(1, c.G), t(2, c.B), 255})
 				}
 			})
@@ -148,9 +151,9 @@ func drawAnswers() {
 
 // answerAt is the answer at screen pixel (x, y), or -1.
 func answerAt(x, y int) int {
-	i := (y/8-textRow0)*40 + x/8
+	i := (y/cellSize-textTop)*textCols + x/cellSize
 	for n, a := range answers {
-		if answerFound && y >= textRow0*8 && x >= 0 && x < 320 && i >= a[0] && i <= a[1] {
+		if answerFound && y >= textTop*cellSize && x >= 0 && x < ega.W && i >= a[0] && i <= a[1] {
 			return n
 		}
 	}

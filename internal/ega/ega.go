@@ -22,26 +22,54 @@ const (
 	H = 200
 )
 
+// Sizes and the screen's regions, in pixels.
+const (
+	tileSize  = 16
+	glyphSize = 8
+
+	mapLeft   = 8   // the map window: 11x11 tiles inside the frame
+	mapTop    = 8   //
+	mapSize   = 176 //
+	mapTiles  = 11  //
+	mapRight  = mapLeft + mapSize
+	mapBottom = mapTop + mapSize
+
+	sideLeft      = 192 // the status box and the text window, right of the map
+	statusWidth   = 120
+	statusHeight  = 64
+	textWidth     = 128
+	textTop       = 96
+	textBottom    = 192
+	lastTextRow   = textBottom - glyphSize
+	tileCampfire  = 75 // its flames flicker
+	white         = 15
+	vgaInvertMask = 255
+	egaInvertMask = 7
+)
+
+// wrap16 wraps a video memory offset to 16 bits, as the 8086's address arithmetic did.
+func wrap16(v int) int { return v & (1<<16 - 1) }
+
 // Driver is the screen, the tile set and the font.
 type Driver struct {
 	Pix    []byte // W*H colour indexes, top row first
 	Tiles  [256][16 * 16]byte
 	Glyphs [128][8 * 8]byte
 
-	// ReadFile returns a file's contents for Gra16/Gra17; ok false is the driver's error path.
+	// ReadFile returns a file's contents for LoadPicture/OpenDoors; ok false is the driver's error path.
 	ReadFile func(name string) ([]byte, bool)
 	// Exit is the game's exit, called with the error code.
 	Exit func(code int)
 	// Speaker toggles the PC speaker (the shake's random clicks).
 	Speaker func(on bool)
 	// Present lets the host show the screen inside a routine that animates on its own (shake,
-	// Gra17's opening doors).
+	// OpenDoors's opening doors).
 	Present func()
 
 	// Palette is filled with the mode's 256 colours (6-bit) by SetMode, when set.
 	Palette *[768]byte
 
-	seed [4]byte // random seed 12h,34h,56h,78h
+	seed [4]byte // the random state
 
 	vga                 bool
 	egaTiles, egaGlyphs []byte // the EGA files, for decoding again on a mode switch
@@ -98,7 +126,7 @@ func (d *Driver) load() {
 // Color is EGA colour c (0..15) as an index in the current mode's palette.
 func (d *Driver) Color(c byte) byte {
 	if d != nil && d.vga {
-		return vgaOfEGA[c&0xf]
+		return vgaOfEGA[c%16]
 	}
 	return c
 }
@@ -143,7 +171,7 @@ func New(pix []byte) *Driver {
 	if pix == nil {
 		pix = make([]byte, W*H)
 	}
-	return &Driver{Pix: pix, seed: [4]byte{0x12, 0x34, 0x56, 0x78}}
+	return &Driver{Pix: pix, seed: [4]byte{18, 52, 86, 120}}
 }
 
 // unpack decodes packed pixels (two a byte, high nibble first) into dst; missing bytes are 0.
@@ -153,10 +181,10 @@ func unpack(dst []byte, packed []byte) {
 		if i/2 < len(packed) {
 			b = packed[i/2]
 		}
-		if i&1 == 0 {
+		if i%2 == 0 {
 			dst[i] = b >> 4
 		} else {
-			dst[i] = b & 0xf
+			dst[i] = b % 16
 		}
 	}
 }
@@ -176,7 +204,7 @@ func (d *Driver) SetGlyphs(packed []byte) {
 // colorOf maps the game's dot and wall colours (CGA's 0..3) to EGA colours; past the
 // driver's table it read zeros.
 func colorOf(c int) byte {
-	switch c & 0xff {
+	switch byte(c) {
 	case 1:
 		return 2
 	case 2:
@@ -187,10 +215,10 @@ func colorOf(c int) byte {
 	return 0
 }
 
-// Palette is the EGA palette (the default 0..7, 38h..3Fh) as 6-bit VGA DAC values, for
-// colour indexes 0..15.
+// Palette is the EGA palette (the default registers 0..7 and 56..63) as 6-bit VGA DAC
+// values, for colour indexes 0..15.
 var Palette = func() [16][3]byte {
-	regs := [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f}
+	regs := [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 56, 57, 58, 59, 60, 61, 62, 63}
 	var p [16][3]byte
 	for i, r := range regs {
 		// EGA 6-bit colour: bits 5..0 = r' g' b' R G B (primary = 2/3, secondary = 1/3)
@@ -266,10 +294,10 @@ func (d *Driver) copyRow(dst, src, x, n int) {
 
 // Tile draws tile t with its top left at (x, y).
 func (d *Driver) Tile(t, x, y int) {
-	g := &d.Tiles[t&0xff]
-	for r := 0; r < 16; r++ {
-		for c := 0; c < 16; c++ {
-			d.set((y+r)*W+x+c, g[r*16+c])
+	g := &d.Tiles[byte(t)]
+	for r := 0; r < tileSize; r++ {
+		for c := 0; c < tileSize; c++ {
+			d.set((y+r)*W+x+c, g[r*tileSize+c])
 		}
 	}
 }
@@ -295,40 +323,41 @@ func (d *Driver) present() {
 
 // --- the driver's entries ----------------------------------------------------------------
 
-// Init is Gra_init: the exit callback and a clear screen.
+// Init is initDriver: the exit callback and a clear screen.
 func (d *Driver) Init(exit func(int)) {
 	d.Exit = exit
-	d.ClrScr()
+	d.Clear()
 }
 
-// ClrScr is Gra_clrscr.
-func (d *Driver) ClrScr() { clear(d.Pix) }
+// Clear is clearScreen.
+func (d *Driver) Clear() { clear(d.Pix) }
 
-// Gra00 ORs a white 16x16 frame (2 pixels thick) around map cell (y, x): the cursor.
-func (d *Driver) Gra00(y, x int) {
-	x0, y0 := x*16+8, (y*16+8)&0xffff
-	for r := 0; r < 16; r++ {
-		for c := 0; c < 16; c++ {
-			if r < 2 || r >= 14 || c < 2 || c >= 14 {
+// DrawCursorBox ORs a white 16x16 frame (2 pixels thick) around map cell (y, x): the cursor.
+func (d *Driver) DrawCursorBox(y, x int) {
+	const thickness = 2
+	x0, y0 := x*tileSize+mapLeft, wrap16(y*tileSize+mapTop)
+	for r := 0; r < tileSize; r++ {
+		for c := 0; c < tileSize; c++ {
+			if r < thickness || r >= tileSize-thickness || c < thickness || c >= tileSize-thickness {
 				if d.vga { // VGA: set
-					d.set((y0+r)*W+x0+c, 15)
+					d.set((y0+r)*W+x0+c, white)
 					continue
 				}
-				d.or((y0+r)*W+x0+c, 15)
+				d.or((y0+r)*W+x0+c, white)
 			}
 		}
 	}
 }
 
-// Gra01 draws row trow of a tile at screen row srow, x = (scol/2)*8 (VGA: scol*4), 1x or
+// DrawTileRow draws row trow of a tile at screen row srow, x = (scol/2)*8 (VGA: scol*4), 1x or
 // (exp != 1) 2x wide.
-func (d *Driver) Gra01(tile, trow, srow, scol, exp int) {
+func (d *Driver) DrawTileRow(tile, trow, srow, scol, exp int) {
 	i := srow*W + (scol>>1)*8
 	if d.vga {
 		i = srow*W + scol*4
 	}
-	row := d.Tiles[tile&0xff][trow*16:]
-	for c := 0; c < 16; c++ {
+	row := d.Tiles[byte(tile)][trow*tileSize:]
+	for c := 0; c < tileSize; c++ {
 		if exp == 1 {
 			d.set(i+c, row[c])
 		} else {
@@ -338,14 +367,14 @@ func (d *Driver) Gra01(tile, trow, srow, scol, exp int) {
 	}
 }
 
-// Gra02 fills h rows of w tiles with one tile, from pixel row row, x = (col/2)*8.
-func (d *Driver) Gra02(h, w, tile, row, col int) {
-	for r := row; ; r += 16 {
-		for c := 0; c < w&0xff; c++ {
-			d.Tile(tile, ((col>>1)+c*2)*8, r)
+// FillTiles fills h rows of w tiles with one tile, from pixel row row, x = (col/2)*8.
+func (d *Driver) FillTiles(h, w, tile, row, col int) {
+	for r := row; ; r += tileSize {
+		for c := 0; c < int(byte(w)); c++ {
+			d.Tile(tile, (col/2+c*2)*glyphSize, r)
 		}
 		h--
-		if h&0xffff == 0 {
+		if uint16(h) == 0 { // a count of 0 runs on through 65536
 			break
 		}
 	}
@@ -354,15 +383,16 @@ func (d *Driver) Gra02(h, w, tile, row, col int) {
 // shake moves the map window (x 8..183, rows 8..185) 2 rows down or up, a row at a time,
 // clicking the speaker at random when sound is on.
 func (d *Driver) shake(sound, down bool) {
+	const rows = 173 // the 2-row move stops short of the window's last row
 	on := false
-	for k := 0; k < 173; k++ {
+	for k := 0; k < rows; k++ {
 		if down {
-			r := 173 - k
-			d.copyRow(r+10, r+8, 8, 176)
+			r := rows - k
+			d.copyRow(r+mapTop+2, r+mapTop, mapLeft, mapSize)
 		} else {
-			d.copyRow(k+8, k+10, 8, 176)
+			d.copyRow(k+mapTop, k+mapTop+2, mapLeft, mapSize)
 		}
-		if sound && d.random()&1 != 0 {
+		if sound && d.random()%2 != 0 {
 			on = !on
 			if d.Speaker != nil {
 				d.Speaker(on)
@@ -375,77 +405,81 @@ func (d *Driver) shake(sound, down bool) {
 	d.present()
 }
 
-// Gra03 moves the map window 2 rows down (the earthquake).
-func (d *Driver) Gra03(sound bool) { d.shake(sound, true) }
+// ShakeDown moves the map window 2 rows down (the earthquake).
+func (d *Driver) ShakeDown(sound bool) { d.shake(sound, true) }
 
-// Gra04 moves the map window 2 rows up.
-func (d *Driver) Gra04(sound bool) { d.shake(sound, false) }
+// ShakeUp moves the map window 2 rows up.
+func (d *Driver) ShakeUp(sound bool) { d.shake(sound, false) }
 
-// Gra05 draws the map window: h rows of 11 tiles from the tile numbers in src, starting at
+// DrawMap draws the map window: h rows of 11 tiles from the tile numbers in src, starting at
 // pixel (8, 8). The width argument is not used.
-func (d *Driver) Gra05(h, w int, src []byte) {
+func (d *Driver) DrawMap(h, w int, src []byte) {
 	k := 0
-	for r := 0; h&0xffff != 0; r++ {
-		for c := 0; c < 11; c++ {
+	for r := 0; uint16(h) != 0; r++ {
+		for c := 0; c < mapTiles; c++ {
 			t := 0
 			if k < len(src) {
 				t = int(src[k])
 			}
 			k++
-			d.Tile(t, 8+c*16, 8+r*16)
+			d.Tile(t, mapLeft+c*tileSize, mapTop+r*tileSize)
 		}
 		h--
 	}
 }
 
-func dot(y, x int) int { return (y&0xffff)*W + x&0xffff }
+func dot(y, x int) int { return wrap16(y)*W + wrap16(x) }
 
-// Dot is Gra_dot: pixel (x, y) set to a colour.
+// Dot is plot: pixel (x, y) set to a colour.
 func (d *Driver) Dot(y, x, col int) { d.set(dot(y, x), colorOf(col)) }
 
-// DotOR is Gra_dot_OR.
+// DotOR is plotOR.
 func (d *Driver) DotOR(y, x, col int) { d.or(dot(y, x), colorOf(col)) }
 
-// DotXOR is Gra_dot_XOR.
+// DotXOR is plotXOR.
 func (d *Driver) DotXOR(y, x, col int) { d.xor(dot(y, x), colorOf(col)) }
 
-// CR is Gra_CR: the text window (x 192..319, rows 96..191) scrolls up one line and the
+// CR is newLine: the text window (x 192..319, rows 96..191) scrolls up one line and the
 // bottom line (rows 184..191) is cleared.
 func (d *Driver) CR() {
-	for r := 96; r < 184; r++ {
-		d.copyRow(r, r+8, 192, 128)
+	for r := textTop; r < lastTextRow; r++ {
+		d.copyRow(r, r+glyphSize, sideLeft, textWidth)
 	}
-	d.fill(192, 184, 128, 8, 0)
+	d.fill(sideLeft, lastTextRow, textWidth, glyphSize, 0)
 }
 
-// inv is the inverting XOR: colour 7, VGA FFh.
+// inv is the inverting XOR: colour 7, VGA all bits.
 func (d *Driver) inv() byte {
 	if d.vga {
-		return 0xff
+		return vgaInvertMask
 	}
-	return 7
+	return egaInvertMask
 }
 
-// Gra09 inverts the map window (XOR inv, x 8..183, rows 8..183).
-func (d *Driver) Gra09() { d.invert(8, 8, 176, 176, d.inv()) }
+// InvertMap inverts the map window (XOR inv, x 8..183, rows 8..183).
+func (d *Driver) InvertMap() { d.invert(mapLeft, mapTop, mapSize, mapSize, d.inv()) }
 
-// Gra10 clears the map window.
-func (d *Driver) Gra10() { d.fill(8, 8, 176, 176, 0) }
+// ClearMap clears the map window.
+func (d *Driver) ClearMap() { d.fill(mapLeft, mapTop, mapSize, mapSize, 0) }
 
-// Gra11 inverts party member a's line in the status box (XOR 7).
-func (d *Driver) Gra11(a int) { d.invert(192, ((a+1)*8)&0xffff, 120, 8, d.inv()) }
+// InvertStatusLine inverts party member a's line in the status box (XOR 7).
+func (d *Driver) InvertStatusLine(a int) {
+	d.invert(sideLeft, wrap16((a+1)*glyphSize), statusWidth, glyphSize, d.inv())
+}
 
-// Gra12 inverts one character cell (x, y) (XOR 7). The game never calls it.
-func (d *Driver) Gra12(x, y int) { d.invert(x*8, (y*8)&0xffff, 8, 8, d.inv()) }
+// InvertCell inverts one character cell (x, y) (XOR 7). The game never calls it.
+func (d *Driver) InvertCell(x, y int) {
+	d.invert(x*glyphSize, wrap16(y*glyphSize), glyphSize, glyphSize, d.inv())
+}
 
-// Gra13 clears the status box (x 192..311, rows 8..71).
-func (d *Driver) Gra13() { d.fill(192, 8, 120, 64, 0) }
+// ClearStatus clears the status box (x 192..311, rows 8..71).
+func (d *Driver) ClearStatus() { d.fill(sideLeft, mapTop, statusWidth, statusHeight, 0) }
 
-// Gra16 loads an RLE picture (byte 02h, count, value; every byte two pixels, high nibble
+// LoadPicture loads an RLE picture (the byte runMark, a count, a value; every byte two pixels, high nibble
 // first). With mem == nil the picture is ORed onto the screen, its first row starting at
 // x = xoff*8; otherwise it is unpacked into mem (W*H pixels). In VGA mode the patch's
 // picture is used (one byte a pixel, XORed); a picture it lacks comes in EGA colours.
-func (d *Driver) Gra16(name string, xoff int, mem []byte) {
+func (d *Driver) LoadPicture(name string, xoff int, mem []byte) {
 	if d.vga {
 		if data, ok := upgrade.Picture(name); ok {
 			d.gra16VGA(data, xoff, mem)
@@ -468,18 +502,18 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 	}
 	if mem != nil {
 		clear(mem)
-		i := xoff * 8
+		i := xoff * glyphSize
 		for n := W * H; ; {
 			cnt, b := 1, next()
-			if b == 2 {
+			if b == runMark {
 				cnt, b = int(next()), next()
 				if cnt == 0 {
-					cnt = 0x100
+					cnt = 256
 				}
 			}
 			for ; cnt > 0; cnt-- {
 				if i >= 0 && i+1 < len(mem) {
-					mem[i], mem[i+1] = d.Color(b>>4), d.Color(b&0xf)
+					mem[i], mem[i+1] = d.Color(b>>4), d.Color(b%16)
 				}
 				i += 2
 				if n -= 2; n == 0 {
@@ -488,18 +522,18 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 			}
 		}
 	}
-	i, x, y := xoff*8, 0, 0
+	i, x, y := xoff*glyphSize, 0, 0
 	for {
 		cnt, b := 1, next()
-		if b == 2 {
+		if b == runMark {
 			cnt, b = int(next()), next()
 			if cnt == 0 {
-				cnt = 0x10000
+				cnt = 65536 // the screen loop's 16-bit count
 			}
 		}
 		for ; cnt > 0; cnt-- {
 			d.or(i+x, d.Color(b>>4))
-			d.or(i+x+1, d.Color(b&0xf))
+			d.or(i+x+1, d.Color(b%16))
 			if x += 2; x >= W {
 				if y++; y == H {
 					return
@@ -510,7 +544,7 @@ func (d *Driver) Gra16(name string, xoff int, mem []byte) {
 	}
 }
 
-// gra16VGA is the VGA driver's Gra16: RLE bytes XORed onto the screen (or mem, cleared
+// gra16VGA is the VGA driver's LoadPicture: RLE bytes XORed onto the screen (or mem, cleared
 // first) from offset xoff, until 320x200 pixels are done (a run may go past).
 func (d *Driver) gra16VGA(data []byte, xoff int, mem []byte) {
 	dst := d.Pix
@@ -529,10 +563,10 @@ func (d *Driver) gra16VGA(data []byte, xoff int, mem []byte) {
 	}
 	for i := 0; i < W*H; {
 		cnt, b := 1, next()
-		if b == 2 {
+		if b == runMark {
 			cnt, b = int(next()), next()
 			if cnt == 0 {
-				cnt = 0x10000
+				cnt = 65536
 			}
 		}
 		for ; cnt > 0; cnt-- {
@@ -544,45 +578,50 @@ func (d *Driver) gra16VGA(data []byte, xoff int, mem []byte) {
 	}
 }
 
-// Gra17 opens the map window like a pair of doors onto a picture (the shrine/mystic views):
+// runMark starts a run in an RLE picture: the count and the repeated byte follow.
+const runMark = 2
+
+// OpenDoors opens the map window like a pair of doors onto a picture (the shrine/mystic views):
 // the old picture slides out to both sides 8 pixels a step while the new one grows from
 // the middle, 11 steps (VGA: a pixel a step, 87 steps).
-func (d *Driver) Gra17(name string) {
+func (d *Driver) OpenDoors(name string) {
 	buf := make([]byte, W*H)
-	d.Gra16(name, 0, buf)
+	d.LoadPicture(name, 0, buf)
 	if d.vga {
-		for n := 87; n > 0; n-- {
-			for r := 8; r < 184; r++ {
+		for n := mapSize/2 - 1; n > 0; n-- {
+			for r := mapTop; r < mapBottom; r++ {
 				row, src := d.Pix[r*W:r*W+W], buf[r*W:r*W+W]
-				copy(row[8:8+n], row[9:9+n])
-				copy(row[184-n:184], row[183-n:183])
-				copy(row[8+n:184-n], src[8+n:184-n])
+				copy(row[mapLeft:mapLeft+n], row[mapLeft+1:mapLeft+1+n])
+				copy(row[mapRight-n:mapRight], row[mapRight-1-n:mapRight-1])
+				copy(row[mapLeft+n:mapRight-n], src[mapLeft+n:mapRight-n])
 			}
 			d.present()
 		}
-		for r := 8; r < 184; r++ {
-			d.Pix[r*W+8], d.Pix[r*W+183] = buf[r*W+8], buf[r*W+183]
+		for r := mapTop; r < mapBottom; r++ {
+			d.Pix[r*W+mapLeft], d.Pix[r*W+mapRight-1] = buf[r*W+mapLeft], buf[r*W+mapRight-1]
 		}
 		d.present()
 		return
 	}
-	for cl := 1; cl <= 11; cl++ {
-		for r := 8; r < 184; r++ {
+	// EGA: in 8-pixel columns, the doors meeting at column 12 (the window's middle)
+	const middle, steps, left, right = 12, 11, mapLeft / 8, mapRight / 8
+	for step := 1; step <= steps; step++ {
+		for r := mapTop; r < mapBottom; r++ {
 			row := d.Pix[r*W : r*W+W]
-			if cl < 11 {
-				copy(row[8:(12-cl)*8], row[16:(13-cl)*8])
-				copy(row[(12+cl)*8:184], row[(11+cl)*8:176])
+			if step < steps {
+				copy(row[left*8:(middle-step)*8], row[(left+1)*8:(middle+1-step)*8])
+				copy(row[(middle+step)*8:right*8], row[(middle-1+step)*8:(right-1)*8])
 			}
-			copy(row[(12-cl)*8:(12+cl)*8], buf[r*W+(12-cl)*8:])
+			copy(row[(middle-step)*8:(middle+step)*8], buf[r*W+(middle-step)*8:])
 		}
 		d.present()
 	}
 }
 
-// Gra18 fills a quadrilateral column by column: from x0 towards x1 (x1 itself not drawn),
+// FillQuad fills a quadrilateral column by column: from x0 towards x1 (x1 itself not drawn),
 // the column runs from the edge y0->y0p to the edge y1->y1p (Bresenham steps). It ORs colour
 // col, or clears when erase is set. The 3D dungeon walls.
-func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
+func (d *Driver) FillQuad(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 	sign := func(v int16) int16 {
 		if v == 0 {
 			return 0
@@ -612,8 +651,8 @@ func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 		for i := 0; i < n; i++ {
 			// A column whose edges crossed (yb < ya) runs on for some 65535 rows: its offset
 			// wraps around video memory's 64K and comes back over the screen.
-			p := ((int(uint16(ya))+i)*W/8+px>>3)&0xffff*8 + px&7
-			if erase&0xff != 0 {
+			p := wrap16((int(uint16(ya))+i)*W/8+px/8)*8 + px%8
+			if byte(erase) != 0 {
 				d.set(p, 0)
 			} else {
 				d.or(p, colorOf(col))
@@ -625,7 +664,7 @@ func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 		// The driver keeps |dx| for the bottom edge only when it set it for the top edge;
 		// otherwise its register still holds the column's byte offset (x/8), and that is
 		// what the bottom edge adds.
-		step := int16(px >> 3)
+		step := int16(px / 8)
 		if ea < 0 {
 			ya += sa
 			step = abs(dx)
@@ -641,105 +680,135 @@ func (d *Driver) Gra18(x0, x1, y0, y1, y0p, y1p, col, erase int) {
 	}
 }
 
-// Gra19 builds glyph 7 (the ankh in the status line) row by row from glyph 0: row i is
+// The ankh glyphs: the whole one, and the status line's, built from the virtues.
+const (
+	glyphFullAnkh = 0
+	glyphAnkh     = 7
+)
+
+// BuildAnkh builds glyph 7 (the ankh in the status line) row by row from glyph 0: row i is
 // copied when *karma[i] == 0 (that virtue reached its highest point) and blanked otherwise.
-func (d *Driver) Gra19(karmas [8]uint16) {
+func (d *Driver) BuildAnkh(karmas [8]uint16) {
 	for r := 0; r < 8; r++ {
-		row := d.Glyphs[7][r*8 : r*8+8]
+		row := d.Glyphs[glyphAnkh][r*glyphSize : (r+1)*glyphSize]
 		if karmas[r] == 0 {
-			copy(row, d.Glyphs[0][r*8:r*8+8])
+			copy(row, d.Glyphs[glyphFullAnkh][r*glyphSize:(r+1)*glyphSize])
 		} else {
 			clear(row)
 		}
 	}
 }
 
-// spitVGA: the VGA driver's flame pixels of tile 4Bh.
-var spitVGA = [30]byte{0x76, 0x77, 0x85, 0x86, 0x94, 0x95, 0x96, 0x97, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8,
-	0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xd5, 0xd6, 0xd7, 0xd8, 0xe6, 0xe7}
+// flamePixelsVGA are the VGA driver's flame pixels of the campfire tile, {row, column}.
+var flamePixelsVGA = [30][2]int{
+	{7, 6}, {7, 7}, {8, 5}, {8, 6}, {9, 4}, {9, 5}, {9, 6}, {9, 7}, {10, 4}, {10, 5}, {10, 6},
+	{10, 7}, {10, 8}, {11, 5}, {11, 6}, {11, 7}, {11, 8}, {11, 9}, {12, 4}, {12, 5}, {12, 6},
+	{12, 7}, {12, 8}, {12, 9}, {13, 5}, {13, 6}, {13, 7}, {13, 8}, {14, 6}, {14, 7},
+}
 
-// AnimSpit makes the flames of tile 4Bh flicker: colour bit 4 flipped at random in rows
+// FlickerFlames makes the campfire's flames flicker: colour bit 4 flipped at random in rows
 // 7..14. VGA: each of 30 flame pixels changes one time in 32.
-func (d *Driver) AnimSpit() {
+func (d *Driver) FlickerFlames() {
 	if d.vga {
-		t := &d.Tiles[0x4b]
-		for i := len(spitVGA) - 1; i >= 0; i-- {
-			if d.random()&0x1f == 0 {
+		t := &d.Tiles[tileCampfire]
+		for i := len(flamePixelsVGA) - 1; i >= 0; i-- {
+			if d.random()%32 == 0 {
 				// ponytail: the driver XORs with a 32-byte colour table indexed by the
 				// pixel's colour, which for the VGA tile's colours reads on into its own
 				// code; the port flips bit 2 (a shade within the palette's ramp) instead.
-				t[spitVGA[i]] ^= 4
+				p := flamePixelsVGA[i]
+				t[p[0]*tileSize+p[1]] ^= 4
 			}
 		}
 		return
 	}
-	masks := [8][2]byte{{0x00, 0x0c}, {0x80, 0x0d}, {0xc0, 0x1f}, {0xc0, 0x1f}, {0x80, 0x0f}, {0xc0, 0x1f}, {0x40, 0x12}, {0xc0, 0x18}}
-	t := &d.Tiles[0x4b]
+	// which pixels of each flame row may flicker: {right half, left half}
+	masks := [8][2]byte{
+		{0b00000000, 0b00001100},
+		{0b10000000, 0b00001101},
+		{0b11000000, 0b00011111},
+		{0b11000000, 0b00011111},
+		{0b10000000, 0b00001111},
+		{0b11000000, 0b00011111},
+		{0b01000000, 0b00010010},
+		{0b11000000, 0b00011000},
+	}
+	const firstRow, half = 7, 8
+	t := &d.Tiles[tileCampfire]
 	for i, m := range masks {
 		right := d.random() & m[0]
 		left := d.random() & m[1]
-		row := t[(7+i)*16:]
-		for k := 0; k < 8; k++ {
-			if left&(0x80>>k) != 0 {
+		row := t[(firstRow+i)*tileSize:]
+		for k := 0; k < half; k++ {
+			if left&(128>>k) != 0 {
 				row[k] ^= 4
 			}
-			if right&(0x80>>k) != 0 {
-				row[8+k] ^= 4
+			if right&(128>>k) != 0 {
+				row[half+k] ^= 4
 			}
 		}
 	}
 }
 
-// AnimFlow scrolls a tile down one row (water, lava), the last row coming back on top.
-func (d *Driver) AnimFlow(tile int) {
+// FlowTile scrolls a tile down one row (water, lava), the last row coming back on top.
+func (d *Driver) FlowTile(tile int) {
 	if tile < 0 || tile >= len(d.Tiles) {
 		return
 	}
 	t := &d.Tiles[tile]
 	var last [16]byte
-	copy(last[:], t[15*16:])
-	copy(t[16:], t[:15*16])
-	copy(t[:16], last[:])
+	copy(last[:], t[(tileSize-1)*tileSize:])
+	copy(t[tileSize:], t[:(tileSize-1)*tileSize])
+	copy(t[:tileSize], last[:])
 }
 
-// flagRows are the flag tiles' waving rows: {tile, row}; row and row+1 swap.
-var flagRows = [5][2]int{{0x0a, 3}, {0x0b, 1}, {0x10, 2}, {0x12, 2}, {0x0e, 1}}
+// The tiles with flags.
+const (
+	tileTowne                   = 10
+	tileCastle                  = 11
+	tileCastleBritanniaEntrance = 14
+	tileShipWest                = 16
+	tileShipEast                = 18
+)
 
-// flagsVGA are the VGA driver's: {tile, offset, pixels} swapped with the row below.
-var flagsVGA = [5][3]int{{0x0a, 0x34, 6}, {0x0b, 0x14, 4}, {0x0e, 0x14, 8}, {0x10, 0x2a, 4}, {0x12, 0x27, 4}}
+// flagRows are the flag tiles' waving rows: {tile, row}; row and row+1 swap.
+var flagRows = [5][2]int{{tileTowne, 3}, {tileCastle, 1}, {tileShipWest, 2}, {tileShipEast, 2}, {tileCastleBritanniaEntrance, 1}}
+
+// flagsVGA are the VGA driver's: {tile, row, column, pixels} swapped with the row below.
+var flagsVGA = [5][4]int{{tileTowne, 3, 4, 6}, {tileCastle, 1, 4, 4}, {tileCastleBritanniaEntrance, 1, 4, 8}, {tileShipWest, 2, 10, 4}, {tileShipEast, 2, 7, 4}}
 
 // WaveFlag swaps the two rows of flag i (0..4).
 func (d *Driver) WaveFlag(i int) {
-	a, n := d.Tiles[flagRows[i][0]][flagRows[i][1]*16:], 16
+	a, n := d.Tiles[flagRows[i][0]][flagRows[i][1]*tileSize:], tileSize
 	if d.vga {
 		f := flagsVGA[i]
-		a, n = d.Tiles[f[0]][f[1]:], f[2]
+		a, n = d.Tiles[f[0]][f[1]*tileSize+f[2]:], f[3]
 	}
 	for k := 0; k < n; k++ {
-		a[k], a[16+k] = a[16+k], a[k]
+		a[k], a[tileSize+k] = a[tileSize+k], a[k]
 	}
 }
 
-// AnimFlag waves the flags, each when the generator comes out non-negative (VGA: one time
+// WaveFlags waves the flags, each when the generator comes out non-negative (VGA: one time
 // in 16).
-func (d *Driver) AnimFlag() {
+func (d *Driver) WaveFlags() {
 	for i := range flagRows {
-		if r := d.random(); d.vga && r&0xf == 0 || !d.vga && int8(r) >= 0 {
+		if r := d.random(); d.vga && r%16 == 0 || !d.vga && r < 128 {
 			d.WaveFlag(i)
 		}
 	}
 }
 
-// PutChar is Gra_putchar: character c at text cell (x, y); past the font it is blank.
+// PutChar is putGlyph: character c at text cell (x, y); past the font it is blank.
 func (d *Driver) PutChar(y, x int, c byte) {
 	var g [64]byte
 	if int(c) < len(d.Glyphs) {
 		g = d.Glyphs[c]
 	}
-	i := ((y*8)&0xffff)*W + x*8
-	for r := 0; r < 8; r++ {
-		for k := 0; k < 8; k++ {
-			d.set(i+r*W+k, g[r*8+k])
+	i := wrap16(y*glyphSize)*W + x*glyphSize
+	for r := 0; r < glyphSize; r++ {
+		for k := 0; k < glyphSize; k++ {
+			d.set(i+r*W+k, g[r*glyphSize+k])
 		}
 	}
 }

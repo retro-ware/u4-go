@@ -1,485 +1,451 @@
 package u4
 
-// Port of U4_MAP.C (unsigned char): the outdoor map window (four 16x16 quarters of the
-// world's 32x32 chunks in D_8742._map) and moving on foot, by ship and balloon.
+// The outdoor map window and moving on foot, on horseback, by ship and by balloon.
+//
+// The world is 256x256 tiles, stored in WORLD.MAP as 8x8 chunks of 32x32 tiles. Outdoors the
+// map window (area.tiles, 32x32) holds four 16x16 quarters of the world around the party,
+// and scrolls by a quarter when the party comes near its edge.
 
-var (
-	D_08CE = -1
-	D_08D0 = -1
+const (
+	quarterTiles  = 16 // a quarter of a chunk is 16x16 tiles
+	worldQuarters = 16 // the world is 16x16 quarters, wrapping round
+	windowTiles   = 32 // the map window is 32x32 tiles, two by two quarters
+
+	scrollLow  = 5  // the window scrolls when the party's place in it falls below this
+	scrollHigh = 27 // or reaches this
+
+	townTiles = 32 // a town is 32x32 tiles; walking off its edge leaves it
 )
 
-// load the portion of the map with coordinates in parameter
-func C_2399(bp06, bp04 int) {
-	if D_08CE != -1 {
-		D_933A[D_08D0][D_08CE] = nil
+// Special places of the world map.
+const (
+	hythlothX, hythlothY = 239, 240 // leaving the dungeon Hythloth, the party finds
+	balloonX, balloonY   = 233, 242 // the balloon waiting here
+
+	daemonX                          = 231 // the daemons guarding the Isle of the Abyss appear here
+	daemonsWestX, daemonsEastX       = 229, 234
+	daemonsNorthY, daemonsSouthY     = 212, 217
+	piratesTriggerX, piratesTriggerY = 221, 224 // stepping east onto this spot brings pirates
+)
+
+var cachedChunkX, cachedChunkY = -1, -1 // the chunk loadChunk loaded last
+
+// loadChunk loads the world chunk (cy, cx) from WORLD.MAP, dropping the one loaded before.
+func loadChunk(cy, cx int) {
+	if cachedChunkX != -1 {
+		loadedChunks[cachedChunkY][cachedChunkX] = nil
 	}
-	if D_933A[bp06][bp04] == nil {
+	if loadedChunks[cy][cx] == nil {
 		m := new(tMap32x32)
-		chunk := File_MAP[(bp06*8+bp04)*0x400:]
+		chunk := worldMap[(cy*8+cx)*chunkSize:]
 		for y := range m {
-			copy(m[y][:], chunk[y*32:])
+			copy(m[y][:], chunk[y*chunkTiles:])
 		}
-		D_933A[bp06][bp04] = m
+		loadedChunks[cy][cx] = m
 	}
-	D_08CE = bp04
-	D_08D0 = bp06
+	cachedChunkX, cachedChunkY = cx, cy
 }
 
-// copyQuarter loads the chunk with world quarter (qy, qx) into the window at (dy, dx).
-func copyQuarter(qy, qx, dy, dx int) {
-	C_2399(qy/2, qx/2)
-	m := D_933A[qy/2][qx/2]
-	for di := 0; di < 16; di++ {
-		for si := 0; si < 16; si++ {
-			*D_8742.x32x32(di+dy, si+dx) = m[(qy&1)*0x10+di][(qx&1)*0x10+si]
-		}
-	}
-}
-
-func tmp0() int { return (int(D_95A5.x) + 1) & 15 }
-func tmp1() int { return (int(D_95A5.y) + 1) & 15 }
-
-func C_249C() { copyQuarter(int(D_95A5.y), int(D_95A5.x), 0, 0) }
-func C_2517() { copyQuarter(int(D_95A5.y), tmp0(), 0, 16) }
-func C_259F() { copyQuarter(tmp1(), int(D_95A5.x), 16, 0) }
-func C_2624() { copyQuarter(tmp1(), tmp0(), 16, 16) }
-
-func C_26B6() {
-	x, y := Party._x, Party._y
-	if Party._loc >= 0x11 {
-		x, y = Party.out_x, Party.out_y
-	}
-	D_95A5.x = x >> 4
-	D_959C.x = x & 15
-	if D_959C.x < 8 {
-		D_959C.x += 0x10
-		D_95A5.x = (D_95A5.x - 1) & 15
-	}
-	D_95A5.y = y >> 4
-	D_959C.y = y & 15
-	if D_959C.y < 8 {
-		D_959C.y += 0x10
-		D_95A5.y = (D_95A5.y - 1) & 15
-	}
-	C_249C()
-	C_2517()
-	C_259F()
-	C_2624()
-}
-
-// Leaving...
-func C_2747() {
-	u4_puts("Leaving...\n")
-	CurMode = MOD_VISION
-	LoadRec("OUTMONST.SAV", &D_8742._npc)
-	File_TLK = nil
-	Party._x = Party.out_x
-	Party._y = Party.out_y
-	C_26B6()
-	CurMode = MOD_OUTDOORS
-	Party._loc = 0
-	Party.f_1dc = 0
-	D_9440 = 1
-	if Party._x == 0xef && Party._y == 0xf0 {
-		D_8742._npc._gtile[31] = TIL_18
-		D_8742._npc._tile[31] = TIL_18
-		D_8742._npc._x[31] = 0xe9
-		D_8742._npc._y[31] = 0xf2
-	}
-	u_kbflush()
-}
-
-// spawn daemons (if horn not used)
-func C_27D9() {
-	if spell_sta != 1 {
-		for si := 7; si >= 0; si-- {
-			D_8742._npc._gtile[si] = TIL_F0
-			D_8742._npc._tile[si] = TIL_F0
-			D_8742._npc._x[si] = 0xe7
-			D_8742._npc._y[si] = Party._y + 1
+// copyQuarter copies the world's quarter (qy, qx) into the window at tile (wy, wx).
+func copyQuarter(qy, qx, wy, wx int) {
+	loadChunk(qy/2, qx/2)
+	chunk := loadedChunks[qy/2][qx/2]
+	top, left := qy%2*quarterTiles, qx%2*quarterTiles
+	for y := 0; y < quarterTiles; y++ {
+		for x := 0; x < quarterTiles; x++ {
+			*area.townTile(wy+y, wx+x) = chunk[top+y][left+x]
 		}
 	}
 }
 
-var D_08EC = [8]uint8{0xE0, 0xE0, 0xE2, 0xE3, 0xE4, 0xE5, 0xE5, 0xE4}
-var D_08F4 = [8]uint8{0xDC, 0xE4, 0xDC, 0xE4, 0xE3, 0xE1, 0xDF, 0xDE}
-var D_08FC = [8]uint8{TIL_82, TIL_82, TIL_82, TIL_82, TIL_83, TIL_83, TIL_81, TIL_81}
+// nextQuarter is the quarter after q, wrapping round the world.
+func nextQuarter(q uint8) int { return (int(q) + 1) % worldQuarters }
 
-// spawn pirate ships
-func C_280A() {
-	for si := 7; si >= 0; si-- {
-		D_8742._npc._x[si] = D_08EC[si]
-		D_8742._npc._y[si] = D_08F4[si]
-		D_8742._npc._tile[si] = TIL_80
-		D_8742._npc._gtile[si] = D_08FC[si]
-	}
+// previousQuarter is the quarter before q, wrapping round the world.
+func previousQuarter(q uint8) uint8 { return (q + worldQuarters - 1) % worldQuarters }
+
+func loadQuarterNorthWest() {
+	copyQuarter(int(windowQuarter.y), int(windowQuarter.x), 0, 0)
+}
+func loadQuarterNorthEast() {
+	copyQuarter(int(windowQuarter.y), nextQuarter(windowQuarter.x), 0, quarterTiles)
+}
+func loadQuarterSouthWest() {
+	copyQuarter(nextQuarter(windowQuarter.y), int(windowQuarter.x), quarterTiles, 0)
+}
+func loadQuarterSouthEast() {
+	copyQuarter(nextQuarter(windowQuarter.y), nextQuarter(windowQuarter.x), quarterTiles, quarterTiles)
 }
 
-// GOING NORTH
-func C_2839() {
-	Party._y--
-	D_959C.y--
-	if D_959C.y < 5 {
-		D_959C.y += 16
-		D_95A5.y = (D_95A5.y - 1) & 15
-		copy(D_8742._map[16*32:32*32], D_8742._map[0:16*32])
-		C_249C()
-		C_2517()
+// centerMap fills the window around the party (or, inside a place, around its entrance).
+func centerMap() {
+	x, y := party.x, party.y
+	if party.loc >= locFirstDungeon {
+		x, y = party.outX, party.outY
 	}
+	windowQuarter.x, windowPos.x = x/quarterTiles, x%quarterTiles
+	if windowPos.x < quarterTiles/2 {
+		windowPos.x += quarterTiles
+		windowQuarter.x = previousQuarter(windowQuarter.x)
+	}
+	windowQuarter.y, windowPos.y = y/quarterTiles, y%quarterTiles
+	if windowPos.y < quarterTiles/2 {
+		windowPos.y += quarterTiles
+		windowQuarter.y = previousQuarter(windowQuarter.y)
+	}
+	loadQuarterNorthWest()
+	loadQuarterNorthEast()
+	loadQuarterSouthWest()
+	loadQuarterSouthEast()
 }
 
-// GOING SOUTH
-func C_2891() {
-	Party._y++
-	D_959C.y++
-	if D_959C.y >= 27 {
-		D_959C.y -= 16
-		D_95A5.y = (D_95A5.y + 1) & 15
-		copy(D_8742._map[0:16*32], D_8742._map[16*32:32*32])
-		C_259F()
-		C_2624()
+// leaveTown takes the party out of a town, castle or village back to the world map.
+func leaveTown() {
+	printText("Leaving...\n")
+	gameMode = modeVision
+	LoadRec("OUTMONST.SAV", &area.people)
+	talkFile = nil
+	party.x, party.y = party.outX, party.outY
+	centerMap()
+	gameMode = modeOutdoors
+	party.loc = 0
+	party.flyingOrLight = 0
+	lineOfSight = 1
+	if party.x == hythlothX && party.y == hythlothY {
+		const slot = 31 // the last of the world's people
+		area.people.baseTile[slot] = tileBalloon
+		area.people.tile[slot] = tileBalloon
+		area.people.x[slot] = balloonX
+		area.people.y[slot] = balloonY
 	}
+	flushKeys()
 }
 
-// GOING WEST
-func C_28E9() {
-	Party._x--
-	D_959C.x--
-	if D_959C.x < 5 {
-		D_959C.x += 16
-		D_95A5.x = (D_95A5.x - 1) & 15
-		for di := 0; di < 32; di++ {
-			copy(D_8742._map[di*32+16:di*32+32], D_8742._map[di*32:di*32+16])
+// spawnDaemons sets eight daemons on the party, unless the Silver Horn holds them off.
+func spawnDaemons() {
+	if activeSpell != effectHorn {
+		for i := 7; i >= 0; i-- {
+			area.people.baseTile[i] = tileDaemon
+			area.people.tile[i] = tileDaemon
+			area.people.x[i] = daemonX
+			area.people.y[i] = party.y + 1
 		}
-		C_249C()
-		C_259F()
 	}
 }
 
-// GOING EAST
-func C_2941() {
-	Party._x++
-	D_959C.x++
-	if D_959C.x >= 27 {
-		D_959C.x -= 16
-		D_95A5.x = (D_95A5.x + 1) & 15
-		for di := 0; di < 32; di++ {
-			copy(D_8742._map[di*32:di*32+16], D_8742._map[di*32+16:di*32+32])
+// The pirate fleet: where the eight ships appear and which way they face.
+var (
+	pirateX    = [8]uint8{224, 224, 226, 227, 228, 229, 229, 228}
+	pirateY    = [8]uint8{220, 228, 220, 228, 227, 225, 223, 222}
+	pirateTile = [8]uint8{tilePirateEast, tilePirateEast, tilePirateEast, tilePirateEast, tilePirateSouth, tilePirateSouth, tilePirateNorth, tilePirateNorth}
+)
+
+// spawnPirates sets the pirate fleet on the map.
+func spawnPirates() {
+	for i := 7; i >= 0; i-- {
+		area.people.x[i] = pirateX[i]
+		area.people.y[i] = pirateY[i]
+		area.people.tile[i] = tilePirateWest
+		area.people.baseTile[i] = pirateTile[i]
+	}
+}
+
+// scrollNorth moves the party a tile north on the world map, scrolling the window when needed.
+func scrollNorth() {
+	party.y--
+	windowPos.y--
+	if windowPos.y < scrollLow {
+		windowPos.y += quarterTiles
+		windowQuarter.y = previousQuarter(windowQuarter.y)
+		half := quarterTiles * windowTiles
+		copy(area.tiles[half:2*half], area.tiles[:half])
+		loadQuarterNorthWest()
+		loadQuarterNorthEast()
+	}
+}
+
+// scrollSouth moves the party a tile south on the world map.
+func scrollSouth() {
+	party.y++
+	windowPos.y++
+	if windowPos.y >= scrollHigh {
+		windowPos.y -= quarterTiles
+		windowQuarter.y = uint8(nextQuarter(windowQuarter.y))
+		half := quarterTiles * windowTiles
+		copy(area.tiles[:half], area.tiles[half:2*half])
+		loadQuarterSouthWest()
+		loadQuarterSouthEast()
+	}
+}
+
+// scrollWest moves the party a tile west on the world map.
+func scrollWest() {
+	party.x--
+	windowPos.x--
+	if windowPos.x < scrollLow {
+		windowPos.x += quarterTiles
+		windowQuarter.x = previousQuarter(windowQuarter.x)
+		for y := 0; y < windowTiles; y++ {
+			row := area.tiles[y*windowTiles : (y+1)*windowTiles]
+			copy(row[quarterTiles:], row[:quarterTiles])
 		}
-		C_2517()
-		C_2624()
+		loadQuarterNorthWest()
+		loadQuarterSouthWest()
 	}
 }
 
-var D_0904 = []uint8{
-	TIL_03, TIL_04, TIL_05, TIL_06, TIL_07, TIL_09, TIL_0A, TIL_0B, TIL_0C,
-	TIL_10, TIL_11, TIL_12, TIL_13, TIL_14, TIL_15, TIL_16, TIL_17, TIL_18,
-	TIL_19, TIL_1A, TIL_1B, TIL_1C, TIL_1D, TIL_1E, TIL_3C, TIL_3E, TIL_3F,
-	TIL_43, TIL_44, TIL_46, TIL_47, TIL_49, TIL_4A, TIL_4C, TIL_8E, TIL_8F,
-	0, // End of list
+// scrollEast moves the party a tile east on the world map.
+func scrollEast() {
+	party.x++
+	windowPos.x++
+	if windowPos.x >= scrollHigh {
+		windowPos.x -= quarterTiles
+		windowQuarter.x = uint8(nextQuarter(windowQuarter.x))
+		for y := 0; y < windowTiles; y++ {
+			row := area.tiles[y*windowTiles : (y+1)*windowTiles]
+			copy(row[:quarterTiles], row[quarterTiles:])
+		}
+		loadQuarterNorthEast()
+		loadQuarterSouthEast()
+	}
 }
 
-// isBrickSolid (in fact: walkable)
-func C_2999(bp04 uint8) bool {
-	for si := 0; D_0904[si] != 0; si++ {
-		if bp04 == D_0904[si] {
+// walkableTiles are the tiles the party can walk onto.
+var walkableTiles = []uint8{
+	tileSwamp, tileGrass, tileScrub, tileForest, tileHills, tileDungeon, tileTowne, tileCastle, tileVillage,
+	tileShipWest, tileShipNorth, tileShipEast, tileShipSouth, tileHorseWest, tileHorseEast, tileTiledFloor, tileBridge, tileBalloon,
+	tileBridgeNorth, tileBridgeSouth, tileLadderUp, tileLadderDown, tileRuins, tileShrine, tileChest, tileBrickFloor, tileWoodFloor,
+	tileMoongate, tilePoisonField, tileFireField, tileSleepField, tileSecretDoor, tileAltar, tileLava, tileTwister, tileTwister2,
+}
+
+// isWalkable says whether the party can walk onto tile.
+func isWalkable(tile uint8) bool {
+	for _, t := range walkableTiles {
+		if t == tile {
 			return true
 		}
 	}
 	return false
 }
 
-func w_Blocked() { /*C_29C3*/
-	u4_puts("Blocked!\n")
-	sound(1)
-	u_kbflush()
+func sayBlocked() {
+	printText("Blocked!\n")
+	sound(soundBeep)
+	flushKeys()
 }
 
-func w_DriftOnly() { /*C_29DE*/
-	u4_puts("Drift Only!\n")
-	u_kbflush()
+func sayDriftOnly() {
+	printText("Drift Only!\n")
+	flushKeys()
 }
 
-// check slow progress
-func C_29EF(bp04 uint8) bool {
-	switch bp04 {
-	case TIL_03:
-		if U4_RND1(7) != 0 {
-			return false
-		}
-	case TIL_05, TIL_06:
-		if U4_RND1(3) != 0 {
-			return false
-		}
-	case TIL_07, TIL_46:
-		if U4_RND1(1) == 0 {
-			return false
-		}
-	default:
-		return false
+// slowProgress says whether rough terrain holds the party back this turn: swamp one turn in
+// eight, scrub and forest one in four, hills and fire half the time.
+func slowProgress(tile uint8) bool {
+	switch tile {
+	case tileSwamp:
+		return randomBits(7) == 0
+	case tileScrub, tileForest:
+		return randomBits(3) == 0
+	case tileHills, tileFireField:
+		return randomBits(1) != 0
+	}
+	return false
+}
+
+// isSailable says whether a ship can sail onto tile: deep or medium water, or a whirlpool or
+// twister.
+func isSailable(tile uint8) bool {
+	return tile < tileShallowWater || (tile >= tileWhirlpool && tile < tileRat)
+}
+
+// windAllows says whether a ship makes way toward dir this turn: sailing with the wind only
+// every fourth turn, against it three turns in four.
+func windAllows(dir uint16) bool {
+	switch windDir {
+	case dir:
+		return party.moves%4 == 0
+	case (dir + 2) % 4:
+		return party.moves%4 != 0
 	}
 	return true
 }
 
-func C_2A38(bp04 uint8) bool {
-	return bp04 < TIL_02 || (bp04 >= TIL_8C && bp04 < TIL_90)
-}
-
-// check slow progress [boat]
-func C_2A5A(bp04 uint16) bool {
-	if WindDir == bp04 {
-		return Party._moves&3 == 0
+// enterMoongate takes the party through a moongate when tile is one: to the gate of the
+// moon Felucca shows, or with both moons new into the Shrine of Spirituality.
+func enterMoongate(tile uint8) bool {
+	if tile != tileMoongate {
+		return false
 	}
-	if WindDir == (bp04+2)&3 {
-		return Party._moves&3 != 0
+	const newMoon = 4
+	if party.trammel == newMoon && party.felucca == newMoon {
+		redraw()
+		teleportOut()
+		party.loc = locShrineSpirituality
+		sound(soundSweep, 160)
+		enterShrine()
+		return true
 	}
+	redraw()
+	party.x = moongateX[party.felucca]
+	party.y = moongateY[party.felucca]
+	teleportOut()
+	sound(soundSweep, 160)
+	centerMap()
+	redraw()
+	teleportIn()
 	return true
 }
 
-// enter moongate ?
-func C_2A91(bp04 uint8) bool {
-	if bp04 != TIL_43 {
+// leftTown says whether a step in a town to windowPos (which wraps below 0) left it,
+// leaving it then.
+func leftTown(pos uint8) bool {
+	if pos < townTiles {
 		return false
 	}
-	if Party._trammel == 4 && Party._felucca == 4 {
-		t_callback()
-		Gra_09()
-		Party._loc = 0x1f
-		sound(9, 0xa0)
-		C_E72C()
-		return true
-	}
-	t_callback()
-	Party._x = D_0814[Party._felucca]
-	Party._y = D_081C[Party._felucca]
-	Gra_09()
-	sound(9, 0xa0)
-	Gra_09()
-	C_26B6()
-	t_callback()
-	Gra_09()
-	sound(9, 0xa0)
-	Gra_09()
+	leaveTown()
 	return true
 }
 
-// move North
-func C_2B19() bool {
-	// LB's castle middle wing
-	if tile_cur == TIL_0E {
-		w_Blocked()
+// step moves the party one tile onto tile, scrolling outdoors or moving in a town; it
+// reports whether the party may take another step (galloping).
+func step(tile uint8, scroll func(), moveInTown func() uint8) bool {
+	if !isWalkable(tile) {
+		sayBlocked()
 		return false
 	}
-	if tile_north != TIL_0E && !C_2999(tile_north) {
-		w_Blocked()
-		return false
-	}
-	if C_29EF(tile_north) {
-		w_SlowProgress()
-		return true
-	}
-	sound(0)
-	if CurMode == MOD_OUTDOORS {
-		C_2839()
-		return !C_2A91(tile_north)
-	}
-	Party._y--
-	D_959C.y = Party._y
-	if D_959C.y <= 0x1f {
-		return true
-	}
-	C_2747()
-	return false
+	return stepOnto(tile, scroll, moveInTown)
 }
 
-func CMDDIR_Up() { /*C_2B8C*/
-	switch {
-	case Party._tile == TIL_10 || Party._tile == TIL_12 || Party._tile == TIL_13:
-		Party._tile = TIL_11
-		u4_puts("Turn North!\n")
-	case Party._tile == TIL_11:
-		u4_puts("Sail North!\n")
-		if !C_2A38(tile_north) {
-			w_Blocked()
-		} else if !C_2A5A(DIR_N) {
-			w_SlowProgress()
-		} else {
-			C_2839()
+// stepOnto is step past the walkability check.
+func stepOnto(tile uint8, scroll func(), moveInTown func() uint8) bool {
+	if slowProgress(tile) {
+		saySlowProgress()
+		return true
+	}
+	sound(soundStep)
+	if gameMode == modeOutdoors {
+		scroll()
+		return !enterMoongate(tile)
+	}
+	return !leftTown(moveInTown())
+}
+
+func stepNorth() bool {
+	// Lord British's castle: its middle wing can only be entered from the south.
+	if hereTile == tileCastleBritanniaEntrance {
+		sayBlocked()
+		return false
+	}
+	if northTile != tileCastleBritanniaEntrance && !isWalkable(northTile) {
+		sayBlocked()
+		return false
+	}
+	return stepOnto(northTile, scrollNorth, func() uint8 { party.y--; windowPos.y = party.y; return windowPos.y })
+}
+
+func stepSouth() bool {
+	return step(southTile, scrollSouth, func() uint8 { party.y++; windowPos.y = party.y; return windowPos.y })
+}
+
+func stepWest() bool {
+	return step(westTile, scrollWest, func() uint8 { party.x--; windowPos.x = party.x; return windowPos.x })
+}
+
+func stepEast() bool {
+	return step(eastTile, func() {
+		scrollEast()
+		if party.y == piratesTriggerY && party.x == piratesTriggerX {
+			spawnPirates()
 		}
-	case Party._tile == TIL_18:
-		w_DriftOnly()
+	}, func() uint8 { party.x++; windowPos.x = party.x; return windowPos.x })
+}
+
+// walk takes a step, and on a galloping horse's turn a second one.
+func walk(stepOnce func() bool) {
+	sound(soundStep)
+	if stepOnce() && gallopStep != 0 {
+		redraw()
+		sound(soundStep)
+		stepOnce()
+	}
+}
+
+// sail turns the ship to face (ship) or, facing that way already, sails a tile.
+func sail(ship uint16, dir uint16, name string, ahead uint8, scroll func()) {
+	if party.tile != ship {
+		party.tile = ship
+		printText("Turn " + name + "!\n")
+		return
+	}
+	printText("Sail " + name + "!\n")
+	switch {
+	case !isSailable(ahead):
+		sayBlocked()
+	case !windAllows(dir):
+		saySlowProgress()
 	default:
-		sound(0)
-		if C_2B19() && D_95C6 != 0 {
-			t_callback()
-			sound(0)
-			C_2B19()
-		}
+		scroll()
 	}
 }
 
-// move South
-func C_2C25() bool {
-	if !C_2999(tile_south) {
-		w_Blocked()
-		return false
-	}
-	if C_29EF(tile_south) {
-		w_SlowProgress()
-		return true
-	}
-	sound(0)
-	if CurMode == MOD_OUTDOORS {
-		C_2891()
-		return !C_2A91(tile_south)
-	}
-	Party._y++
-	D_959C.y = Party._y
-	if D_959C.y <= 0x1f {
-		return true
-	}
-	C_2747()
-	return false
-}
+// isShip says whether tile is the party's ship (facing any way).
+func isShip(tile uint16) bool { return tile >= tileShipWest && tile <= tileShipSouth }
 
-func CMDDIR_Down() { /*C_2C8A*/
+func cmdNorth() {
 	switch {
-	case Party._tile == TIL_18:
-		w_DriftOnly()
-	case Party._tile == TIL_10 || Party._tile == TIL_12 || Party._tile == TIL_11:
-		Party._tile = TIL_13
-		u4_puts("Turn South!\n")
-	case Party._tile == TIL_13:
-		u4_puts("Sail South!\n")
-		if !C_2A38(tile_south) {
-			w_Blocked()
-		} else if !C_2A5A(DIR_S) {
-			w_SlowProgress()
-		} else {
-			C_2891()
-		}
+	case isShip(party.tile):
+		sail(tileShipNorth, dirNorth, "North", northTile, scrollNorth)
+	case party.tile == tileBalloon:
+		sayDriftOnly()
 	default:
-		sound(0)
-		if C_2C25() && D_95C6 != 0 {
-			t_callback()
-			sound(0)
-			C_2C25()
-		}
-		// spawn demons on verity island?
-		if Party._x >= 0xe5 && Party._x < 0xea && Party._y >= 0xd4 && Party._y < 0xd9 {
-			C_27D9()
-		}
+		walk(stepNorth)
 	}
 }
 
-// move West
-func C_2D44() bool {
-	if !C_2999(tile_west) {
-		w_Blocked()
-		return false
-	}
-	if C_29EF(tile_west) {
-		w_SlowProgress()
-		return true
-	}
-	sound(0)
-	if CurMode == MOD_OUTDOORS {
-		C_28E9()
-		return !C_2A91(tile_west)
-	}
-	Party._x--
-	D_959C.x = Party._x
-	if D_959C.x <= 0x1f {
-		return true
-	}
-	C_2747()
-	return false
-}
-
-func CMDDIR_Left() { /*C_2DA9*/
+func cmdSouth() {
 	switch {
-	case Party._tile == TIL_18:
-		w_DriftOnly()
-	case Party._tile == TIL_13 || Party._tile == TIL_12 || Party._tile == TIL_11:
-		Party._tile = TIL_10
-		u4_puts("Turn West!\n")
-	case Party._tile == TIL_10:
-		u4_puts("Sail West!\n")
-		if !C_2A38(tile_west) {
-			w_Blocked()
-		} else if !C_2A5A(DIR_W) {
-			w_SlowProgress()
-		} else {
-			C_28E9()
-		}
+	case party.tile == tileBalloon:
+		sayDriftOnly()
+	case isShip(party.tile):
+		sail(tileShipSouth, dirSouth, "South", southTile, scrollSouth)
 	default:
-		if Party._tile == TIL_15 {
-			Party._tile = TIL_14
-		}
-		sound(0)
-		if C_2D44() && D_95C6 != 0 {
-			t_callback()
-			sound(0)
-			C_2D44()
+		walk(stepSouth)
+		if party.x >= daemonsWestX && party.x < daemonsEastX && party.y >= daemonsNorthY && party.y < daemonsSouthY {
+			spawnDaemons()
 		}
 	}
 }
 
-// move East
-func C_2E4F() bool {
-	if !C_2999(tile_east) {
-		w_Blocked()
-		return false
-	}
-	if C_29EF(tile_east) {
-		w_SlowProgress()
-		return true
-	}
-	sound(0)
-	if CurMode == MOD_OUTDOORS {
-		C_2941()
-		if Party._y == 0xe0 && Party._x == 0xdd {
-			C_280A()
-		}
-		return !C_2A91(tile_east)
-	}
-	Party._x++
-	D_959C.x = Party._x
-	if D_959C.x <= 0x1f {
-		return true
-	}
-	C_2747()
-	return false
-}
-
-func CMDDIR_Right() { /*C_2EC5*/
+func cmdWest() {
 	switch {
-	case Party._tile == TIL_18:
-		w_DriftOnly()
-	case Party._tile == TIL_13 || Party._tile == TIL_10 || Party._tile == TIL_11:
-		Party._tile = TIL_12
-		u4_puts("Turn East!\n")
-	case Party._tile == TIL_12:
-		u4_puts("Sail East!\n")
-		if !C_2A38(tile_east) {
-			w_Blocked()
-		} else if !C_2A5A(DIR_E) {
-			w_SlowProgress()
-		} else {
-			C_2941()
-			if Party._y == 0xe0 && Party._x == 0xdd {
-				C_280A()
+	case party.tile == tileBalloon:
+		sayDriftOnly()
+	case isShip(party.tile):
+		sail(tileShipWest, dirWest, "West", westTile, scrollWest)
+	default:
+		if party.tile == tileHorseEast {
+			party.tile = tileHorseWest
+		}
+		walk(stepWest)
+	}
+}
+
+func cmdEast() {
+	switch {
+	case party.tile == tileBalloon:
+		sayDriftOnly()
+	case isShip(party.tile):
+		sail(tileShipEast, dirEast, "East", eastTile, func() {
+			scrollEast()
+			if party.y == piratesTriggerY && party.x == piratesTriggerX {
+				spawnPirates()
 			}
-		}
+		})
 	default:
-		if Party._tile == TIL_14 {
-			Party._tile = TIL_15
+		if party.tile == tileHorseWest {
+			party.tile = tileHorseEast
 		}
-		sound(0)
-		if C_2E4F() && D_95C6 != 0 {
-			t_callback()
-			sound(0)
-			C_2E4F()
-		}
+		walk(stepEast)
 	}
 }

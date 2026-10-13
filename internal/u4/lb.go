@@ -1,8 +1,10 @@
 package u4
 
-// Port of U4_LB.C: talking to Lord British.
+// Talking to Lord British.
 
-var D_6FF0 = []string{
+// lordBritishWords are the words Lord British answers to (four letters are enough): bye,
+// help and health, then the topics of lordBritishAnswers.
+var lordBritishWords = []string{
 	"bye",
 	"help",
 	"health",
@@ -32,7 +34,8 @@ var D_6FF0 = []string{
 	"virtue",
 }
 
-var D_7028 = []string{
+// lordBritishAnswers are Lord British's answers on the topics from "name" on.
+var lordBritishAnswers = []string{
 	"\n\n\nHe says:\nMy name is\nLord British,\nSovereign of\nall Britannia!\n",
 	"\n\n\n\n\nThou see the\nKing with the\nRoyal Sceptre.\n",
 	"\n\n\nHe says:\nI rule all\nBritannia, and\nshall do my best\nto help thee!\n",
@@ -59,54 +62,64 @@ var D_7028 = []string{
 	"\nHe says:\nThe Eight\nVirtues of the\nAvatar are:\nHonesty,\nCompassion,\nValor,\nJustice,\nSacrifice,\nHonor,\nSpirituality,\nand Humility!\n",
 }
 
-// 10 seconds delay
-func C_E1FC() {
-	u_kbflush()
-	u_delay(10, 1)
-	if u_kbhit() != 0 {
-		u_kbread()
+// pauseForKey waits ten seconds, or until a key.
+func pauseForKey() {
+	flushKeys()
+	waitSeconds(10, true)
+	if keyWaiting() {
+		readKey()
 	}
 }
 
-// putsWait prints each text, waiting between them.
-func putsWait(ss ...string) {
-	for i, s := range ss {
-		u4_puts(s)
-		if i < len(ss)-1 {
-			C_E1FC()
+// putsWait prints each text, pausing between them.
+func putsWait(texts ...string) {
+	for i, text := range texts {
+		printText(text)
+		if i < len(texts)-1 {
+			pauseForKey()
 		}
 	}
 }
 
-// when asked 'help'
-func C_E21E() {
-	u4_puts("He says: ")
-	it := Party.mItems
+// lordBritishHelp is Lord British's advice for how far the Avatar has come.
+func lordBritishHelp() {
+	printText("He says: ")
+	// (The original ANDs the karmas' bits: true when they share a set bit.)
+	karmaBits := party.karmaHonesty & party.karmaCompassion & party.karmaValor & party.karmaJustice &
+		party.karmaSacrifice & party.karmaHonor & party.karmaSpirituality & party.karmaHumility
+	hasAll := func(items ...int) bool {
+		for _, item := range items {
+			if !hasBit(party.items, item) {
+				return false
+			}
+		}
+		return true
+	}
 	switch {
-	case Party._moves < 1000:
+	case party.moves < 1000:
 		putsWait("To survive in this hostile land thou must first know thyself! Seek ye to master thy weapons and thy magical ability!\n",
 			"\nTake great care in these thy first travels in Britannia.\n",
 			"\nUntil thou dost well know thyself, travel not far from the safety of the townes!\n")
-	case Party.f_1d8 == 1:
+	case party.size == 1:
 		putsWait("Travel not the open lands alone. There are many worthy people in the diverse townes whom it would be wise to ask to Join thee!\n",
 			"\nBuild thy party unto eight travellers, for only a true leader can win the Quest!\n")
-	case Party.mRunes == 0:
+	case party.runes == 0:
 		putsWait("Learn ye the paths of virtue. Seek to gain entry unto the eight shrines!\n",
 			"\nFind ye the Runes, needed for entry into each shrine, and learn each chant or \"Mantra\" used to focus thy meditations.\n",
 			"\nWithin the Shrines thou shalt learn of the deeds which show thy inner virtue or vice!\n",
 			"\nChoose thy path wisely for all thy deeds of good and evil are remembered and can return to hinder thee!\n")
-	case Party._hones&Party._compa&Party._valor&Party._justi&Party._sacri&Party._honor&Party._spiri&Party._humil != 0:
+	case karmaBits != 0:
 		putsWait("Visit the Seer Hawkwind often and use his wisdom to help thee prove thy virtue.\n",
 			"\nWhen thou art ready, Hawkwind will advise thee to seek the Elevation unto partial Avatarhood in a virtue.\n",
 			"\nSeek ye to become a partial Avatar in all eight virtues, for only then shalt thou be ready to seek the codex!\n")
-	case Party.mStones == 0:
+	case party.stones == 0:
 		putsWait("Go ye now into the depths of the dungeons. Therein recover the 8 colored stones from the altar pedestals in the halls of the dungeons.\n",
 			"\nFind the uses of these stones for they can help thee in the Abyss!\n")
 	case anyKarma() != 0:
-		u4_puts("Thou art doing very well indeed on the path to Avatarhood! Strive ye to achieve the Elevation in all eight virtues!\n")
-	case (it>>ST_BELL)&(it>>ST_BOOK)&(it>>ST_CANDLE)&1 == 0:
-		u4_puts("Find ye the Bell, Book and Candle!  With these three things, one may enter the Great Stygian Abyss!\n")
-	case (it>>ST_KEY_C)&(it>>ST_KEY_L)&(it>>ST_KEY_T)&1 == 0:
+		printText("Thou art doing very well indeed on the path to Avatarhood! Strive ye to achieve the Elevation in all eight virtues!\n")
+	case !hasAll(itemBell, itemBook, itemCandle):
+		printText("Find ye the Bell, Book and Candle!  With these three things, one may enter the Great Stygian Abyss!\n")
+	case !hasAll(itemKeyCourage, itemKeyLove, itemKeyTruth):
 		putsWait("Before thou dost enter the Abyss thou shalt need the Key of Three Parts, and the Word of Passage.\n",
 			"\nThen might thou enter the Chamber of the Codex of Ultimate Wisdom!\n")
 	default:
@@ -116,160 +129,168 @@ func C_E21E() {
 	}
 }
 
-// looks for the parameter in Lord British's keywords (4 chars are enough): the index of
-// the keyword, or -1
-func C_E37E(bp04 []byte) int {
-	for i, k := range D_6FF0 {
-		if strnicmp(bp04, k, 4) == 0 {
+// lordBritishWord is the index of the word asked in lordBritishWords, or -1.
+func lordBritishWord(asked string) int {
+	for i, word := range lordBritishWords {
+		if sameWord(asked, word, 4) {
 			return i
 		}
 	}
 	return -1
 }
 
-func C_E3D2(bp04 string) {
-	di := 0
-	for i := 0; i < len(bp04); i++ {
-		if bp04[i] == '\n' {
-			if di == 12 {
-				C_E1FC()
-				di = 0
+// printPaged prints text, pausing after every page of lines.
+func printPaged(text string) {
+	lines := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '\n' {
+			if lines == textPageLines {
+				pauseForKey()
+				lines = 0
 			} else {
-				di++
+				lines++
 			}
 		}
-		u4_putc(int(bp04[i]))
+		printChar(int(text[i]))
 	}
 }
 
-func C_E408() {
-	for b := int(Party.f_1d8) - 1; b >= 0; b-- {
-		c := &Party.chara[b]
-		if c._stat != 'D' {
-			c._stat = 'G'
-			c._HP[0] = c._HP[1]
+// healParty heals the living party members fully, and cures them.
+func healParty() {
+	for i := int(party.size) - 1; i >= 0; i-- {
+		member := &party.members[i]
+		if member.status != statusDead {
+			member.status = statusGood
+			member.hp = member.maxHP
 		}
 	}
 }
 
-// when asked 'health'
-func C_E442() {
-	u4_puts("\n\n\n\n\n\nHe says: I am well, thank ye.\n\nHe asks: Art thou well?\x12\x12\b")
-	switch AskY_N() {
+// askAfterHealth: Lord British asks whether the Avatar is well, and heals the party if not.
+func askAfterHealth() {
+	printText("\n\n\n\n\n\nHe says: I am well, thank ye.\n\nHe asks: Art thou well?" + answerRoom(2))
+	switch askYesNo() {
 	case 'Y':
-		u4_puts("\nHe says: That is good.\n")
+		printText("\nHe says: That is good.\n")
 	case 'N':
-		u4_puts("\nHe says: Let me heal thy wounds!\n")
-		// heal party
-		sound(10, 10)
-		Gra_09()
-		sound(9, 0xc0)
-		Gra_09()
-		C_E408()
-		dspl_Stats()
+		printText("\nHe says: Let me heal thy wounds!\n")
+		sound(soundMagic, 10)
+		invertMap()
+		sound(soundSweep, 192)
+		invertMap()
+		healParty()
+		showStats()
 	}
 }
 
-func C_E498(bp04 *uint16) {
-	v := int(int16(*bp04)) + U4_RND1(7) + 1
-	*bp04 = uint16(u4_min(v, 50))
+// maxStat is as far as a level gained raises an attribute.
+const maxStat = 50
+
+// raiseStat raises an attribute by 1 to 8, up to maxStat.
+func raiseStat(stat *uint16) {
+	*stat = uint16(min(int(int16(*stat))+randomBits(7)+1, maxStat))
 }
 
-func C_E4C3() {
-	for b := 0; b < int(Party.f_1d8); b++ {
-		c := &Party.chara[b]
-		loc_C := uint16(100)
-		for loc_A := uint16(100); loc_A <= c._XP; loc_A <<= 1 {
-			loc_C += 100
+// levelUp raises the members whose experience earned it a level: one for every doubling of
+// their experience from 100, each worth 100 hit points, and a raise in every attribute.
+func levelUp() {
+	for i := 0; i < int(party.size); i++ {
+		member := &party.members[i]
+		maxHP := uint16(100)
+		for xp := uint16(100); xp <= member.xp; xp *= 2 {
+			maxHP += 100
 		}
-		if c._HP[1] < loc_C {
-			c._HP[1] = loc_C
-			c._HP[0] = loc_C
-			c._stat = 'G'
-			C_E498(&c._str)
-			C_E498(&c._dex)
-			C_E498(&c._int)
-			Gra_CR()
-			u4_puts(cstr(c._name[:]))
-			u4_puts("\nThou art now Level ")
-			u4_putl(int32(loc_C/100), 1, '0')
-			Gra_CR()
-			Gra_09()
-			sound(9, 0xc0)
-			Gra_09()
-			dspl_Stats()
+		if member.maxHP >= maxHP {
+			continue
 		}
+		member.maxHP, member.hp = maxHP, maxHP
+		member.status = statusGood
+		raiseStat(&member.strength)
+		raiseStat(&member.dexterity)
+		raiseStat(&member.intelligence)
+		newLine()
+		printText(cstr(member.name[:]))
+		printText("\nThou art now Level ")
+		printNumber(int32(maxHP/100), 1, '0')
+		newLine()
+		invertMap()
+		sound(soundSweep, 192)
+		invertMap()
+		showStats()
 	}
-	u4_puts("What would thou ask of me?\n")
+	printText("What would thou ask of me?\n")
 }
 
-// conversation with Lord british
-func C_E59B() {
-	var bp_12 [15]byte
-	name0 := func() string { return cstr(Party.chara[0]._name[:]) }
-	if Party.f_1e4 == 0 {
-		// -- first time --
-		Party.f_1e4 = 1
-		u4_puts("\n\n\nLord British rises and says: At long last!\n")
-		u4_puts(name0())
-		u4_putc(',')
-		u4_puts(" thou hast come!  We have waited such a long, long time...\n\n")
-		C_E1FC()
-		u4_puts("\n\nLord British sits and says: A new age is upon Britannia. The great evil Lords are gone but our people lack direction and purpose in their lives...\n\n\nA champion of virtue is called for. Thou may be this champion, but only time shall tell.  I will aid thee any way that I can!\n")
-		u4_puts("How may I help thee?\n")
+// talkToLordBritish is an audience with Lord British: his welcome (and the Avatar raised
+// from the dead, or levels gained), then his answers until "bye".
+func talkToLordBritish() {
+	avatar := func() string { return cstr(party.members[0].name[:]) }
+	if party.metLordBritish == 0 {
+		party.metLordBritish = 1
+		printText("\n\n\nLord British rises and says: At long last!\n")
+		printText(avatar())
+		printChar(',')
+		printText(" thou hast come!  We have waited such a long, long time...\n\n")
+		pauseForKey()
+		printText("\n\nLord British sits and says: A new age is upon Britannia. The great evil Lords are gone but our people lack direction and purpose in their lives...\n\n\nA champion of virtue is called for. Thou may be this champion, but only time shall tell.  I will aid thee any way that I can!\n")
+		printText("How may I help thee?\n")
 	} else {
-		// -- second time and after --
-		if Party.chara[0]._stat == 'D' {
-			// resurection
-			Party.chara[0]._stat = 'G'
-			u4_puts(name0())
-			u4_puts(", Thou shalt live again!\n")
-			// heal party
-			sound(10, 20)
-			Gra_09()
-			sound(9, 0xc0)
-			Gra_09()
-			C_E408()
-			dspl_Stats()
+		if party.members[0].status == statusDead {
+			party.members[0].status = statusGood
+			printText(avatar())
+			printText(", Thou shalt live again!\n")
+			sound(soundMagic, 20)
+			invertMap()
+			sound(soundSweep, 192)
+			invertMap()
+			healParty()
+			showStats()
 		}
-		u4_puts("\n\n\nLord British says:  Welcome ")
-		u4_puts(name0())
-		if Party.f_1d8 >= 3 {
-			u4_puts(" and thy worthy Adventurers!\n")
-		} else if Party.f_1d8 == 2 {
-			u4_puts(" and thee also ")
-			u4_puts(cstr(Party.chara[1]._name[:]))
-			u4_puts("!\n")
-		} else {
-			Gra_CR()
+		printText("\n\n\nLord British says:  Welcome ")
+		printText(avatar())
+		switch {
+		case party.size >= 3:
+			printText(" and thy worthy Adventurers!\n")
+		case party.size == 2:
+			printText(" and thee also ")
+			printText(cstr(party.members[1].name[:]))
+			printText("!\n")
+		default:
+			newLine()
 		}
-		C_E4C3()
+		levelUp()
 	}
+	const (
+		wordBye    = 0
+		wordHelp   = 1
+		wordHealth = 2
+		firstTopic = 3
+	)
 	for {
-		u4_gets(bp_12[:], 15)
-		Gra_CR()
-		bp_02 := 0
-		if bp_12[0] != 0 {
-			bp_02 = C_E37E(bp_12[:])
+		asked := readWord(14)
+		newLine()
+		word := wordBye // nothing typed
+		if asked != "" {
+			word = lordBritishWord(asked)
 		}
-		if bp_02 == 0 { // "bye"
+		if word == wordBye {
 			break
 		}
-		switch bp_02 {
-		case 2:
-			C_E442()
-		case 1:
-			C_E21E()
+		switch word {
+		case wordHealth:
+			askAfterHealth()
+		case wordHelp:
+			lordBritishHelp()
 		case -1:
-			u4_puts("\nHe says: I cannot help thee with that.\n")
+			printText("\nHe says: I cannot help thee with that.\n")
 		default:
-			C_E3D2(D_7028[bp_02-3])
+			printPaged(lordBritishAnswers[word-firstTopic])
 		}
-		u4_puts("\nWhat else?\n")
+		printText("\nWhat else?\n")
 	}
-	u4_puts("Lord British says: Fare thee well my friend")
-	if Party.f_1d8 > 1 {
-		u4_putc('s')
+	printText("Lord British says: Fare thee well my friend")
+	if party.size > 1 {
+		printChar('s')
 	}
-	u4_puts("!\n")
+	printText("!\n")
 }

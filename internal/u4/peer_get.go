@@ -1,387 +1,384 @@
 package u4
 
-// Ports of U4_PEER.C (gem views) and U4_GET.C (chests, cannons, torches).
+// Peering at a gem (the map of the town or dungeon level), getting chests (and their traps),
+// firing the ship's cannon and lighting torches.
 
-// ---- U4_PEER.C ----
+// ---- Peering at a gem ----
 
-var D_2F72 = [128]uint8{
-	0x0C, 0x0B, 0x0A, 0x01, 0x01, 0x09, 0x02, 0x08, 0x07, 0x05, 0x05, 0x05, 0x05, 0x04, 0x04, 0x04,
-	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x04, 0x05, 0x04, 0x04, 0x05, 0x05, 0x06, 0x06, 0x05,
-	0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
-	0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x05, 0x05, 0x07, 0x06, 0x06, 0x05, 0x00, 0x03, 0x04,
-	0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x07, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
-	0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
-	0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
-	0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x06, 0x00, 0x07,
-}
-
-var D_2FF2 = [16]uint8{0x20, 0x06, 0x05, 0x04, 0x24, 0x20, 0x20, 0x0F, 0x54, 0x46, 0x5E, 0x00, 0x0E, 0x0E, 0x02, 0x03}
-
-func MK_COORD(a, b int) int { return (a+8)*4 + b }
-
-var (
-	D_8CFC [600]uint8
-	D_8F54 [22][22]uint8
+// How a town's tiles look on the gem's map: each a pattern of dots in a 4x4 square.
+const (
+	gemNothing = iota
+	gemGrass
+	gemForest
+	gemLava
+	gemWall // castles, bridges, walls
+	gemBuilding
+	gemShrine
+	gemMountain
+	gemHill
+	gemScrub
+	gemShallowWater
+	gemWater
+	gemDeepWater
 )
 
-// display the town map (bp04: with the player's position)
-func C_B9EF(bp04 int) {
-	loc_B := CurMode
-	CurMode = MOD_VISION
-	Gra_10()
-	for loc_A := 0; loc_A < 32; loc_A++ {
-		for loc_C := 0; loc_C < 32; loc_C++ {
-			PT := func(x, y, c int) { Gra_dot(MK_COORD(loc_A, x), MK_COORD(loc_C, y), c) }
-			pts := func(c int, xy ...int) {
-				for i := 0; i < len(xy); i += 2 {
-					PT(xy[i], xy[i+1], c)
-				}
-			}
-			t := *D_8742.x32x32(loc_A, loc_C)
-			k := uint8(5) // C_BCA0
-			if t < 0x80 {
-				k = D_2F72[t]
-			}
-			switch k {
-			case 1: // grass
-				pts(1, 0, 1, 1, 3, 2, 1, 3, 3)
-			case 2: // forest
-				pts(1, 0, 3, 1, 1, 2, 3, 3, 1, 0, 1, 1, 3, 2, 1, 3, 3)
-			case 3: // lava
-				pts(2, 0, 0, 1, 0, 2, 0, 3, 0, 0, 2, 1, 2, 2, 2, 3, 2)
-			case 4: // castle/bridge
-				pts(3, 0, 0, 0, 1, 0, 2, 0, 3, 3, 0, 3, 1, 3, 2, 3, 3)
-			case 5: // dungeon/town
-				pts(3, 1, 1, 2, 1, 1, 2, 2, 2)
-			case 6: // shrine
-				pts(3, 1, 0, 2, 0, 1, 3, 2, 3, 0, 0, 0, 1, 0, 2, 0, 3, 3, 0, 3, 1, 3, 2, 3, 3)
-			case 7: // mountain
-				pts(3, 1, 1, 2, 1, 1, 2, 2, 2, 1, 0, 2, 0, 1, 3, 2, 3, 0, 0, 0, 1, 0, 2, 0, 3, 3, 0, 3, 1, 3, 2, 3, 3)
-			case 8: // hill
-				pts(3, 0, 0, 1, 0, 0, 1, 1, 1, 2, 2, 3, 2, 2, 3, 3, 3)
-			case 9: // bush
-				pts(1, 0, 1, 1, 1, 2, 1, 0, 3, 2, 3, 3, 3)
-			case 10: // shallow water
-				pts(2, 0, 0, 2, 0, 1, 2, 3, 2)
-			case 11: // water
-				pts(2, 0, 0, 2, 2)
-			case 12: // deep water
-				PT(2*(loc_C&1), 2, 3)
-			}
-		}
-	}
-	u_kbflush()
-	y, x := int(D_959C.y), int(D_959C.x)
-	for loc_C := 0; u_kbhit() == 0; loc_C++ {
-		if bp04 != 0 {
-			for r := 0; r < 4; r++ {
-				Gra_dot_XOR(MK_COORD(y, r), MK_COORD(x, loc_C&3), 3)
-			}
-		}
-	}
-	u_kbread()
-	CurMode = loc_B
+// gemLook is the pattern of each of the first 128 tiles; people and monsters show as
+// gemBuilding.
+var gemLook = [128]uint8{
+	12, 11, 10, 1, 1, 9, 2, 8, 7, 5, 5, 5, 5, 4, 4, 4,
+	5, 5, 5, 5, 5, 5, 5, 4, 5, 4, 4, 5, 5, 6, 6, 5,
+	6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+	7, 7, 7, 7, 7, 7, 7, 5, 5, 7, 6, 6, 5, 0, 3, 4,
+	3, 3, 3, 3, 3, 3, 3, 3, 3, 7, 3, 3, 3, 3, 3, 3,
+	5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+	4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+	4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 6, 0, 7,
 }
 
-// display the dungeon level map
-func C_C23B() {
-	loc_E := CurMode
-	CurMode = MOD_VISION
-	Gra_10()
-	D_8F54 = [22][22]uint8{}
-	txt_Y, txt_X = -1, -1
-	loc_C := 0
-	txt_Y = 11
-	D_8CFC[loc_C] = 11
-	loc_C++
-	txt_X = 11
-	D_8CFC[loc_C] = 11
-	loc_C++
-	D_8CFC[loc_C] = Party._y
-	loc_C++
-	D_8CFC[loc_C] = Party._x
-	loc_C++
-	D_8F54[10][10] = 1
-	Gra_putchar(0x01)
-	for {
-		loc_C--
-		loc_F := int(D_8CFC[loc_C])
-		loc_C--
-		loc_A := int(D_8CFC[loc_C])
-		loc_C--
-		txt_X = int16(D_8CFC[loc_C]) - 1
-		loc_C--
-		txt_Y = int16(D_8CFC[loc_C]) - 1
-		for loc_B := -1; loc_B < 2; txt_X, txt_Y, loc_B = txt_X+1, txt_Y-3, loc_B+1 {
-			for loc_D := -1; loc_D < 2; txt_Y, loc_D = txt_Y+1, loc_D+1 {
-				if loc_B|loc_D == 0 {
-					continue
-				}
-				bp_0e := (loc_B + loc_F) & 7
-				bp_10 := (loc_D + loc_A) & 7
-				if txt_Y < 1 || txt_Y > 22 || txt_X < 1 || txt_X > 22 || D_8F54[txt_Y-1][txt_X-1] != 0 {
-					continue
-				}
-				t := dngTile(bp_10, bp_0e)
-				Gra_putchar(D_2FF2[t>>4])
-				if t&0xf0 != 0xf0 {
-					D_8CFC[loc_C] = uint8(txt_Y)
-					D_8CFC[loc_C+1] = uint8(txt_X)
-					D_8CFC[loc_C+2] = uint8(bp_10)
-					D_8CFC[loc_C+3] = uint8(bp_0e)
-					loc_C += 4
-					if loc_C >= 600 {
-						loc_C = 0
-					}
-					D_8F54[txt_Y-1][txt_X-1] = 1
+// gemDot is a dot of a pattern: its row and column in the 4x4 square.
+type gemDot struct{ row, col int }
+
+// gemPatterns are the patterns' colours and dots (deep water is drawn by itself).
+var gemPatterns = map[uint8]struct {
+	color int
+	dots  []gemDot
+}{
+	gemGrass:        {1, []gemDot{{0, 1}, {1, 3}, {2, 1}, {3, 3}}},
+	gemForest:       {1, []gemDot{{0, 3}, {1, 1}, {2, 3}, {3, 1}, {0, 1}, {1, 3}, {2, 1}, {3, 3}}},
+	gemLava:         {2, []gemDot{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 2}, {1, 2}, {2, 2}, {3, 2}}},
+	gemWall:         {3, []gemDot{{0, 0}, {0, 1}, {0, 2}, {0, 3}, {3, 0}, {3, 1}, {3, 2}, {3, 3}}},
+	gemBuilding:     {3, []gemDot{{1, 1}, {2, 1}, {1, 2}, {2, 2}}},
+	gemShrine:       {3, []gemDot{{1, 0}, {2, 0}, {1, 3}, {2, 3}, {0, 0}, {0, 1}, {0, 2}, {0, 3}, {3, 0}, {3, 1}, {3, 2}, {3, 3}}},
+	gemMountain:     {3, []gemDot{{1, 1}, {2, 1}, {1, 2}, {2, 2}, {1, 0}, {2, 0}, {1, 3}, {2, 3}, {0, 0}, {0, 1}, {0, 2}, {0, 3}, {3, 0}, {3, 1}, {3, 2}, {3, 3}}},
+	gemHill:         {3, []gemDot{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {2, 2}, {3, 2}, {2, 3}, {3, 3}}},
+	gemScrub:        {1, []gemDot{{0, 1}, {1, 1}, {2, 1}, {0, 3}, {2, 3}, {3, 3}}},
+	gemShallowWater: {2, []gemDot{{0, 0}, {2, 0}, {1, 2}, {3, 2}}},
+	gemWater:        {2, []gemDot{{0, 0}, {2, 2}}},
+}
+
+// gemPixel is the pixel of dot d of the town map's square (row, col): the map's 32x32
+// squares start eight squares in.
+func gemPixel(square, d int) int { return (square+8)*4 + d }
+
+// showTownMap shows the town's map until a key, with the party's position blinking when
+// withParty.
+func showTownMap(withParty bool) {
+	savedMode := gameMode
+	gameMode = modeVision
+	clearMap()
+	for row := 0; row < townTiles; row++ {
+		for col := 0; col < townTiles; col++ {
+			dot := func(r, c, color int) { plot(gemPixel(row, r), gemPixel(col, c), color) }
+			tile := *area.townTile(row, col)
+			look := uint8(gemBuilding)
+			if tile < tilePirateWest {
+				look = gemLook[tile]
+			}
+			if look == gemDeepWater {
+				dot(2*(col%2), 2, 3)
+				continue
+			}
+			if p, ok := gemPatterns[look]; ok {
+				for _, d := range p.dots {
+					dot(d.row, d.col, p.color)
 				}
 			}
 		}
-		if loc_C == 0 {
+	}
+	flushKeys()
+	y, x := int(windowPos.y), int(windowPos.x)
+	for blink := 0; !keyWaiting(); blink++ {
+		if withParty {
+			for r := 0; r < 4; r++ {
+				plotXOR(gemPixel(y, r), gemPixel(x, blink%4), 3)
+			}
+		}
+	}
+	readKey()
+	gameMode = savedMode
+}
+
+// dungeonMapGlyphs are the font's characters for each kind of dungeon room on the gem's map.
+var dungeonMapGlyphs = [16]uint8{32, 6, 5, 4, 36, 32, 32, 15, 84, 70, 94, 0, 14, 14, 2, 3}
+
+// The dungeon map shows the level around the party on the map window's 22x22 characters.
+const (
+	gemMapSize   = 22
+	gemMapCenter = 11
+	avatarGlyph  = 1
+	mapStackSize = 150 // the original's stack of rooms to look round, which wrapped
+)
+
+// showDungeonMap shows the rooms of the party's level that can be seen from it (through any
+// but walls) until a key, the level wrapping round as often as fits.
+func showDungeonMap() {
+	savedMode := gameMode
+	gameMode = modeVision
+	clearMap()
+	var seen [gemMapSize][gemMapSize]bool
+	type room struct{ row, col, y, x uint8 }
+	var stack [mapStackSize]room
+	top := 0
+	textRow, textCol = gemMapCenter, gemMapCenter
+	stack[top] = room{gemMapCenter, gemMapCenter, party.y, party.x}
+	top++
+	seen[gemMapCenter-1][gemMapCenter-1] = true
+	putGlyph(avatarGlyph)
+	for {
+		top--
+		r := stack[top]
+		for dx := -1; dx <= 1; dx++ {
+			for dy := -1; dy <= 1; dy++ {
+				if dx == 0 && dy == 0 {
+					continue
+				}
+				row, col := int(r.row)+dy, int(r.col)+dx
+				if row < 1 || row > gemMapSize || col < 1 || col > gemMapSize || seen[row-1][col-1] {
+					continue
+				}
+				x, y := (int(r.x)+dx)&(levelSize-1), (int(r.y)+dy)&(levelSize-1)
+				textRow, textCol = int16(row), int16(col)
+				contents := dngTile(y, x)
+				putGlyph(dungeonMapGlyphs[contents/16])
+				if dngKind(contents) != dngWall {
+					stack[top] = room{uint8(row), uint8(col), uint8(y), uint8(x)}
+					top = (top + 1) % mapStackSize
+					seen[row-1][col-1] = true
+				}
+			}
+		}
+		if top == 0 {
 			break
 		}
 	}
-	txt_Y = 23
-	txt_X = 24
-	u_kbflush()
-	u_kbread()
-	CurMode = loc_E
-	D_9446 = 1
+	textRow, textCol = textBottom, textLeft
+	flushKeys()
+	readKey()
+	gameMode = savedMode
+	forceRender = 1
 }
 
-func C_C403() {
-	if Party._loc >= 0x11 {
-		C_C23B()
+// peerAtGem shows the map of the dungeon level or the town.
+func peerAtGem() {
+	if party.loc >= locFirstDungeon {
+		showDungeonMap()
 	} else {
-		C_B9EF(1)
+		showTownMap(true)
 	}
 }
 
-func CMD_Peer() { /*C_C41D*/
-	u4_puts("Peer at ")
-	if Party._gems == 0 {
-		w_What()
+func cmdPeer() {
+	printText("Peer at ")
+	if party.gems == 0 {
+		sayWhat()
 		return
 	}
-	u4_puts("a Gem!\n")
-	Party._gems--
-	C_C403()
+	printText("a Gem!\n")
+	party.gems--
+	peerAtGem()
 }
 
-// ---- U4_GET.C ----
+// ---- Chests ----
 
-func C_70CE(bp04 int) {
-	C_09D9(bp04)
-	hitChara(bp04, U4_RND3(30))
+func acidTrap(member int) {
+	flashMember(member)
+	damageMember(member, randomBelow(30))
 }
 
-func C_70F1() {
-	u4_puts("The Chest Holds:\n")
-	si := U4_RND3(80) + U4_RND1(7) + 10
-	u4_putl(int32(si), 1, ' ')
-	u4_puts(" Gold\n")
-	if int(Party._gold)+si <= 9999 {
-		Party._gold += uint16(si)
-	} else {
-		Party._gold = 9999
-	}
+const maxGold = 9999
+
+// chestGold gives the party the chest's 10 to 96 gold.
+func chestGold() {
+	printText("The Chest Holds:\n")
+	gold := randomBelow(80) + randomBits(7) + 10
+	printNumber(int32(gold), 1, ' ')
+	printText(" Gold\n")
+	party.gold = uint16(min(int(party.gold)+gold, maxGold))
 }
 
-// trapped chest ?
-func C_7150(bp04 int) {
-	si := U4_RND1(3)
-	if si&1 == 0 {
-		// note: si's bit 0 is always reset here, so the Sleep and Poison traps never occur.
-		si &= int(u_rand_a())
-		switch si {
+// openChest lets member (-1: by magic, who always evades) open a chest: half of them are
+// trapped, which the nimble may evade.
+func openChest(member int) {
+	if trap := randomBits(3); trap%2 == 0 {
+		// The trap is 0 or 2 masked with a random byte: Sleep and Bomb never come.
+		trap &= int(randomByte())
+		switch trap {
 		case 0:
-			u4_puts("Acid")
+			printText("Acid")
 		case 1:
-			u4_puts("Sleep")
+			printText("Sleep")
 		case 2:
-			u4_puts("Poison")
+			printText("Poison")
 		default:
-			u4_puts("Bomb")
+			printText("Bomb")
 		}
-		u4_puts(" Trap!\n")
-		if bp04 == -1 || U4_RND3(100) <= int(Party.chara[bp04]._dex)+25 {
-			u4_puts("Evaded!\n")
-			sound(8)
-		} else if si == 0 { // Acid
-			C_70CE(bp04)
-		} else if si == 1 { // Sleep
-			Party.chara[bp04]._stat = 'S'
-			if CurMode >= MOD_COMBAT {
-				Fighters._chtile[bp04] = TIL_38
+		printText(" Trap!\n")
+		switch {
+		case member == -1 || randomBelow(100) <= int(party.members[member].dexterity)+25:
+			printText("Evaded!\n")
+			sound(soundFailure)
+		case trap == 0:
+			acidTrap(member)
+		case trap == 1:
+			party.members[member].status = statusAsleep
+			if gameMode >= modeCombat {
+				fighters.memberTile[member] = tileAsleep
 			}
-			C_09D9(bp04)
-		} else if si == 2 { // Poison
-			Party.chara[bp04]._stat = 'P'
-			dspl_Stats()
-			C_09D9(bp04)
-		} else { // Bomb
-			C_1584()
+			flashMember(member)
+		case trap == 2:
+			party.members[member].status = statusPoisoned
+			showStats()
+			flashMember(member)
+		default:
+			damageParty()
 		}
 	}
-	C_70F1()
+	chestGold()
 }
 
-func C_722F(bp04 int) {
-	if CurMode == MOD_DUNGEON {
-		if tile_cur != 0x40 {
-			w_NotHere()
+// getChest lets member open the chest the party stands on. Taking a town's chest is theft:
+// honesty, justice and honor suffer.
+func getChest(member int) {
+	if gameMode == modeDungeon {
+		if hereTile != dngChest {
+			sayNotHere()
 			return
 		}
-		*D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)) = 0
+		*area.dungeonRoom(int(party.z), int(party.y), int(party.x)) = dngCorridor
 	} else {
-		if tile_cur != TIL_3C {
-			w_NotHere()
+		if hereTile != tileChest {
+			sayNotHere()
 			return
 		}
-		if Party._loc != 0 && *D_8742.x32x32(int(Party._y), int(Party._x)) == TIL_3C {
-			*D_8742.x32x32(int(Party._y), int(Party._x)) = TIL_3E
-			karma_dec(&Party._hones, 1)
-			karma_dec(&Party._justi, 1)
-			karma_dec(&Party._honor, 1)
+		if party.loc != 0 && *area.townTile(int(party.y), int(party.x)) == tileChest {
+			*area.townTile(int(party.y), int(party.x)) = tileBrickFloor
+			lowerKarma(&party.karmaHonesty, 1)
+			lowerKarma(&party.karmaJustice, 1)
+			lowerKarma(&party.karmaHonor, 1)
 		} else {
-			si := 0x1f
-			for ; si >= 0; si-- {
-				if D_8742._npc._tile[si] == TIL_3C && Party._x == D_8742._npc._x[si] && Party._y == D_8742._npc._y[si] {
+			for i := len(area.people.tile) - 1; i >= 0; i-- {
+				if area.people.tile[i] == tileChest && party.x == area.people.x[i] && party.y == area.people.y[i] {
+					area.people.baseTile[i] = 0
+					area.people.tile[i] = 0
 					break
 				}
 			}
-			if si >= 0 {
-				D_8742._npc._gtile[si] = 0
-				D_8742._npc._tile[si] = 0
-			}
 		}
 	}
-	C_7150(bp04)
+	openChest(member)
 }
 
-func CMD_Get() { /*C_72EC*/
-	if Party.f_1dc != 0 && Party._tile == TIL_18 {
-		u4_puts("Get chest\n")
-		w_DriftOnly()
+func cmdGet() {
+	if party.flyingOrLight != 0 && party.tile == tileBalloon {
+		printText("Get chest\n")
+		sayDriftOnly()
 		return
 	}
-	u4_puts("Get Chest!\n")
-	si := AskChara("Who opens?\x12\x12\b")
-	if si < 0 {
+	printText("Get Chest!\n")
+	member := askMember("Who opens?" + answerRoom(2))
+	if member < 0 {
 		return
 	}
-	if !isCharaConscious(si) {
-		w_Disabled()
+	if !isConscious(member) {
+		sayDisabled()
 		return
 	}
-	C_722F(si)
+	getChest(member)
 }
 
-func C_7337() {
-	a := int(activeChara)
-	p := Combat_MAP(int(Combat._charaY[a]), int(Combat._charaX[a]))
-	if *p != TIL_3C {
-		w_NotHere()
+// getChestInCombat lets the active member open the chest on the battlefield they stand on.
+func getChestInCombat() {
+	a := int(activeMember)
+	tile := combatTile(int(battlefield.memberY[a]), int(battlefield.memberX[a]))
+	if *tile != tileChest {
+		sayNotHere()
 		return
 	}
-	*p = TIL_16
-	if t := D_8742.x8x8x8(int(Party._z), int(Party._y), int(Party._x)); *t == 0x40 {
-		*t = 0
+	*tile = tileTiledFloor
+	if room := area.dungeonRoom(int(party.z), int(party.y), int(party.x)); *room == dngChest {
+		*room = dngCorridor
 	}
-	C_7150(a)
+	openChest(a)
 }
 
-// (G)et chest [combat]
-func C_73B8() {
-	u4_puts("Get Chest!\n")
-	C_7337()
+func cmdGetInCombat() {
+	printText("Get Chest!\n")
+	getChestInCombat()
 }
 
-// ---- FIRE ----
+// ---- The ship's cannon ----
 
-const D_22C8 = "Broadsides Only!\n"
+const broadsidesOnly = "Broadsides Only!\n"
 
-func CMD_Fire() { /*C_73C9*/
-	var loc_C, loc_D int
-	u4_puts("Fire ")
-	if Party._tile < TIL_10 || Party._tile > TIL_13 {
-		w_What()
+// cmdFire fires the ship's cannon broadside, up to three tiles: it sinks a ship or kills a
+// person, a monster only one time in four; Lord British survives it.
+func cmdFire() {
+	printText("Fire ")
+	if party.tile < tileShipWest || party.tile > tileShipSouth {
+		sayWhat()
 		return
 	}
-	u4_puts("Cannon!\n")
-	AskDir("Dir: ", &loc_C, &loc_D)
-	if loc_C|loc_D == 0 {
+	printText("Cannon!\n")
+	dx, dy := askDirection("Dir: ")
+	if dx == 0 && dy == 0 {
 		return
 	}
-	if loc_C != 0 {
-		if Party._tile != TIL_11 && Party._tile != TIL_13 {
-			u4_puts(D_22C8)
-			sound(2)
+	facesAlong := party.tile == tileShipNorth || party.tile == tileShipSouth
+	if (dx != 0) != facesAlong {
+		printText(broadsidesOnly)
+		sound(soundBadCommand)
+		return
+	}
+	sound(soundMissile)
+	x, y := int(party.x)+dx, int(party.y)+dy
+	hitX, hitY = uint8(viewCenter+dx), uint8(viewCenter+dy)
+	hitTile = tileMissile
+	target := -1
+	for flown := 1; ; flown++ {
+		if flown > 3 {
+			hitTile = 0
 			return
 		}
-	} else if Party._tile != TIL_10 && Party._tile != TIL_12 {
-		u4_puts(D_22C8)
-		sound(2)
-		return
-	}
-	// -- FIRING --
-	sound(3)
-	loc_F := int(Party._x) + loc_C
-	loc_B := int(Party._y) + loc_D
-	hit_x = uint8(loc_C + 5)
-	hit_y = uint8(loc_D + 5)
-	hit_tile = TIL_4D
-	loc_A := -1
-	for loc_E := 1; ; loc_E++ {
-		hitIt := loc_E > 3
-		if !hitIt {
-			loc_A = C_0A58(0x1f, uint8(loc_F), uint8(loc_B))
-			hitIt = loc_A != -1 && D_8742._npc._tile[loc_A] != TIL_8C && D_8742._npc._tile[loc_A] != TIL_18
-		}
-		if hitIt {
-			hit_tile = 0
-			if loc_A == -1 {
-				return
-			}
-			// -- HIT SOMETHING --
-			hit_tile = TIL_4F
-			C_36C7()
-			hit_tile = 0
-			sound(6)
-			if loc_A < 8 && U4_RND1(3) != 0 {
-				return
-			}
-			if D_8742._npc._tile[loc_A] == TIL_5E {
-				return
-			}
+		target = personAt(31, uint8(x), uint8(y))
+		if target != -1 && area.people.tile[target] != tileWhirlpool && area.people.tile[target] != tileBalloon {
 			break
 		}
-		C_36C7()
-		hit_x += uint8(loc_C)
-		loc_F += loc_C
-		hit_y += uint8(loc_D)
-		loc_B += loc_D
-		loc_A = -1
+		drawView()
+		hitX += uint8(dx)
+		hitY += uint8(dy)
+		x += dx
+		y += dy
 	}
-	D_8742._npc._gtile[loc_A] = 0
-	D_8742._npc._tile[loc_A] = 0
+	hitTile = tileHitFlash
+	drawView()
+	hitTile = 0
+	sound(soundMonsterHit)
+	if target < 8 && randomBits(3) != 0 {
+		return
+	}
+	if area.people.tile[target] == tileLordBritish {
+		return
+	}
+	area.people.baseTile[target] = 0
+	area.people.tile[target] = 0
 }
 
-// ---- IGNITE ----
+// ---- Torches ----
 
-func CMD_Ignite() { /*C_7525*/
-	u4_puts("Ignite Torch!\n")
-	if CurMode != MOD_DUNGEON {
-		w_NotHere()
+// torchTurns is how long a torch burns.
+const torchTurns = 100
+
+func cmdIgnite() {
+	printText("Ignite Torch!\n")
+	if gameMode != modeDungeon {
+		sayNotHere()
 		return
 	}
-	if Party._torches == 0 {
-		w_NoneLeft()
+	if party.torches == 0 {
+		sayNoneLeft()
 		return
 	}
-	Party._torches--
-	Party.f_1dc += 100
-	if CurMode == MOD_DUNGEON {
-		C_AE41()
-	}
+	party.torches--
+	party.flyingOrLight += torchTurns
+	lookAround()
 }

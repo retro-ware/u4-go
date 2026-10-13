@@ -151,6 +151,12 @@ func (g *game) Update() error {
 	return nil
 }
 
+// widen6 widens a 6-bit VGA colour level to 8 bits.
+func widen6(v byte) byte {
+	v %= 64
+	return v<<2 | v>>4
+}
+
 func (g *game) Draw(screen *ebiten.Image) {
 	screen.Fill(color.Black)
 	if ShowFrame == nil {
@@ -164,8 +170,7 @@ func (g *game) Draw(screen *ebiten.Image) {
 	pal := f.Palette
 	lut := &g.lut
 	for i := 0; i < 256; i++ {
-		r, gg, b := pal[i*3]&63, pal[i*3+1]&63, pal[i*3+2]&63
-		lut[i] = [4]byte{r<<2 | r>>4, gg<<2 | gg>>4, b<<2 | b>>4, 0xFF}
+		lut[i] = [4]byte{widen6(pal[i*3]), widen6(pal[i*3+1]), widen6(pal[i*3+2]), 255}
 	}
 	pix := g.rgba.Pix
 	for i, c := range f.Pix[:ScreenW*ScreenH] {
@@ -240,4 +245,33 @@ func (g *game) Layout(outsideWidth, outsideHeight int) (int, int) {
 // Exit ends the program once the game goroutine returns.
 func Exit(code int) {
 	os.Exit(code)
+}
+
+// StartHeadless starts the game goroutine without a window, for tests; Step then runs it one
+// host tick at a time. The clock of day is fixed, as for a script.
+func StartHeadless(gameMain func()) {
+	scriptOn = true
+	go func() {
+		<-tick
+		defer func() {
+			finished.Store(true)
+			yielded <- struct{}{}
+		}()
+		gameMain()
+	}()
+}
+
+// Step runs one host tick of a headless game; false once the game has ended.
+func Step() bool {
+	if finished.Load() {
+		return false
+	}
+	clockAcc += 256
+	Clock += uint32(clockAcc / TPS)
+	clockAcc %= TPS
+	tickTimers()
+	KeyPolled = false
+	tick <- struct{}{}
+	<-yielded
+	return !finished.Load()
 }

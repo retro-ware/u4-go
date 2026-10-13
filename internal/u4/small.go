@@ -2,484 +2,597 @@ package u4
 
 import "github.com/memmaker/u4-go/internal/music"
 
-// Ports of the small command modules: U4_HOLE.C, U4_Q_N_V.C (unsigned char), U4_EVT.C,
-// U4_MIX.C and U4_LOCAT.C.
+// The small commands: hole up & camp, quit (save), new order, volume, mix, locate,
+// ready and wear; and the random events of the ground the party stands on.
 
-// ---- U4_HOLE.C ----
+// ---- Hole up & camp ----
 
-var D_26B8 = [8]uint8{TIL_C0, TIL_C4, TIL_C8, TIL_CC, TIL_B4, TIL_A0, TIL_A4, TIL_DC}
+// ambushers are the monsters that may surprise a sleeping camp.
+var ambushers = [8]uint8{tileOrc, tileSkeleton, tileRogue, tilePython, tileInsects, tileSlime, tileTroll, tileWisp}
 
-func C_8A5A() {
-	u4_puts("Ambushed!\n")
-	D_9772 = Party._x
-	D_9140 = Party._y
-	D_9452 = D_26B8[U4_RND1(7)]
-	D_96F8 = D_9452
-	for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-		if Party.chara[si]._stat == 'G' {
-			Party.chara[si]._stat = 'S'
+// The camp is ambushed one time in campAmbushOdds, and rests at most once every
+// campInterval moves.
+const (
+	campAmbushOdds = 8
+	campInterval   = 100
+	campSeconds    = 10
+)
+
+// ambush: monsters fall on the camp, and the sleeping wake to fight.
+func ambush() {
+	printText("Ambushed!\n")
+	foeX = party.x
+	foeY = party.y
+	foeTile = ambushers[randomBits(len(ambushers)-1)]
+	encounterTile = foeTile
+	for m := int(party.size) - 1; m >= 0; m-- {
+		if party.members[m].status == statusGood {
+			party.members[m].status = statusAsleep
 		}
 	}
-	dspl_Stats()
-	C_7FD7()
+	showStats()
+	runCombat()
 }
 
-func CMD_HoleUp() { /*C_8AB0*/
-	u4_puts("Hole up & Camp\n")
-	if CurMode != MOD_DUNGEON && Party._loc != 0 {
-		w_NotHere()
+func cmdHoleUp() {
+	printText("Hole up & Camp\n")
+	if gameMode != modeDungeon && party.loc != 0 {
+		sayNotHere()
 		return
 	}
-	if Party._tile != TIL_1F {
-		w_OnlyOnFoot()
+	if party.tile != tileOnFoot {
+		sayOnlyOnFoot()
 		return
 	}
 	name := "CAMP.CON"
-	if CurMode == MOD_DUNGEON {
+	if gameMode == modeDungeon {
 		name = "CAMP.DNG"
 	}
-	LoadRec(name, &Combat)
+	LoadRec(name, &battlefield)
 	music.Play(music.Stop)
-	// the loop clears 32 bytes from Fighters._tile: _tile and _gtile
-	Fighters._tile = [16]uint8{}
-	Fighters._gtile = [16]uint8{}
-	for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-		t := uint8(0)
-		if isCharaAlive(si) {
-			t = TIL_38
+	fighters.tile = [16]uint8{}
+	fighters.baseTile = [16]uint8{}
+	for m := int(party.size) - 1; m >= 0; m-- {
+		tile := uint8(0)
+		if isAlive(m) {
+			tile = tileAsleep
 		}
-		Fighters._chtile[si] = t
-		D_944A[si] = t
+		fighters.memberTile[m] = tile
+		memberFrame[m] = tile
 	}
-	dspl_Stats()
-	u4_puts("Resting...\n")
-	D_95CC = int16(CurMode)
-	CurMode = MOD_COM_CAMP
-	u_delay(10, 0)
-	if U4_RND1(7) == 0 {
-		C_8A5A()
-	} else if Party._moves/100 == uint32(Party.f_1e6) {
-		u4_puts("No effect.\n")
+	showStats()
+	printText("Resting...\n")
+	modeBeforeCombat = int16(gameMode)
+	gameMode = modeCombatCamp
+	waitSeconds(campSeconds, false)
+	if randomBits(campAmbushOdds-1) == 0 {
+		ambush()
+	} else if party.moves/campInterval == uint32(party.lastCamp) {
+		printText("No effect.\n")
 	} else {
-		Party.f_1e6 = uint16(Party._moves / 100)
-		for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-			if isCharaAlive(si) {
-				if Party.chara[si]._stat == 'S' {
-					Party.chara[si]._stat = 'G'
-				}
-				HP_inc(si, U4_RND1(119))
-				HP_inc(si, 99)
-				Party.chara[si]._MP = 99
+		party.lastCamp = uint16(party.moves / campInterval)
+		for m := int(party.size) - 1; m >= 0; m-- {
+			if !isAlive(m) {
+				continue
 			}
+			if party.members[m].status == statusAsleep {
+				party.members[m].status = statusGood
+			}
+			healMember(m, randomBits(119))
+			healMember(m, 99)
+			party.members[m].mp = maxMP
 		}
-		MP_recover()
-		u4_puts("Players Healed!\n")
+		regainMP()
+		printText("Players Healed!\n")
 	}
-	dspl_Stats()
-	CurMode = uint16(D_95CC)
-	if CurMode == MOD_DUNGEON {
-		D_9446 = 1
+	showStats()
+	gameMode = uint16(modeBeforeCombat)
+	if gameMode == modeDungeon {
+		forceRender = 1
 	}
 }
 
-// ---- U4_Q_N_V.C ----
+// ---- Quit, new order and volume ----
 
-func CMD_Quit() { /*C_6F29*/
+// inDungeon says whether the party is in one of the dungeons (or the Abyss).
+func inDungeon() bool { return party.loc >= locFirstDungeon && party.loc <= locAbyss }
+
+func cmdQuit() {
 	// The replies say plainly what happened (the original: "Quit & Save...", "Not Here!").
-	u4_puts("Save game: ")
-	u4_putl(int32(Party._moves), 1, '0')
-	u4_puts(" moves\n")
-	dungeon := Party._loc >= 0x11 && Party._loc <= 0x18
-	if Party._loc != 0 && !dungeon {
-		u4_puts("Can't save in\ntowns. Not saved!\n")
+	printText("Save game: ")
+	printNumber(int32(party.moves), 1, '0')
+	printText(" moves\n")
+	if party.loc != 0 && !inDungeon() {
+		printText("Can't save in\ntowns. Not saved!\n")
 		return
 	}
-	Save("PARTY.SAV", &Party)
-	Save("MONSTERS.SAV", &D_8742._npc)
+	dungeon := inDungeon()
+	Save("PARTY.SAV", &party)
+	Save("MONSTERS.SAV", &area.people)
 	if dungeon {
-		SaveBytes("DNGMAP.SAV", D_8742._map[:0x200])
+		SaveBytes("DNGMAP.SAV", area.tiles[:dungeonMapSize])
 	}
-	u4_puts("Game saved.\n")
+	printText("Game saved.\n")
 }
 
-const D_21F4 = ", You must lead!\n"
-
-// exchange two party members
-func C_6FF9(a, b *tChara) { *a, *b = *b, *a }
-
-func CMD_NewOrder() { /*C_7034*/
-	u4_puts("New Order!\n")
-	loc_C := AskChara("Exchange #\x12\x12\b")
-	if loc_C < 0 {
-		return
-	}
-	if loc_C == 0 {
-		u4_puts(cstr(Party.chara[0]._name[:]))
-		u4_puts(D_21F4)
-		return
-	}
-	loc_D := AskChara("    with #\x12\x12\b")
-	if loc_D < 0 {
-		return
-	}
-	if loc_D == 0 {
-		u4_puts(cstr(Party.chara[0]._name[:]))
-		u4_puts(D_21F4)
-		return
-	}
-	if loc_C == loc_D {
-		w_What()
-		return
-	}
-	C_6FF9(&Party.chara[loc_C], &Party.chara[loc_D])
-	Gra_13()
-	dspl_Stats()
+// sayMustLead tells that the first member leads and cannot be moved.
+func sayMustLead() {
+	printText(cstr(party.members[0].name[:]))
+	printText(", You must lead!\n")
 }
 
-func CMD_Volume() { /*C_70AD*/
-	u4_puts("Volume O")
-	SoundFlag ^= 1
-	if SoundFlag != 0 {
-		u4_puts("n!\n")
+// swapMembers exchanges two members' places in the party.
+func swapMembers(a, b int) {
+	party.members[a], party.members[b] = party.members[b], party.members[a]
+}
+
+func cmdNewOrder() {
+	printText("New Order!\n")
+	first := askMember("Exchange #" + answerRoom(2))
+	if first < 0 {
+		return
+	}
+	if first == 0 {
+		sayMustLead()
+		return
+	}
+	second := askMember("    with #" + answerRoom(2))
+	if second < 0 {
+		return
+	}
+	if second == 0 {
+		sayMustLead()
+		return
+	}
+	if first == second {
+		sayWhat()
+		return
+	}
+	swapMembers(first, second)
+	clearStatus()
+	showStats()
+}
+
+func cmdVolume() {
+	printText("Volume O")
+	soundOn ^= 1
+	if soundOn != 0 {
+		printText("n!\n")
 	} else {
-		u4_puts("ff!\n")
+		printText("ff!\n")
 	}
 }
 
-// ---- U4_EVT.C ----
+// ---- Random events ----
 
-func C_919A() {
-	for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-		if isCharaConscious(si) && U4_RND1(3) == 0 {
-			Party.chara[si]._stat = 'S'
-			C_09D9(si)
-			dspl_Stats()
-		}
-	}
-}
-
-func C_91D1() {
-	for si := int(Party.f_1d8) - 1; si >= 0; si-- {
-		if Party.chara[si]._stat == 'G' && U4_RND1(7) == 0 {
-			Party.chara[si]._stat = 'P'
-			C_09D9(si)
-			dspl_Stats()
-		}
-	}
-}
-
-// randomEvent
-func C_9209() {
-	if CurMode == MOD_OUTDOORS && tile_cur == TIL_17 && U4_RND1(7) == 0 {
-		u4_puts("\nBridge Trolls!\n")
-		D_96F8 = TIL_A4
-		D_9772 = Party._x
-		D_9140 = Party._y
-		D_946C = TIL_17
-		C_7DBC()
-		return
-	}
-	if CurMode <= MOD_BUILDING && Party.f_1dc != 0 {
-		return
-	}
-	if CurMode >= MOD_COMBAT {
-		a := int(activeChara)
-		if Fighters._chtile[a] == 0 {
-			return
-		}
-		switch *Combat_MAP(int(Combat._charaY[a]), int(Combat._charaX[a])) {
-		case TIL_03, TIL_44:
-			if Party.chara[a]._stat == 'G' {
-				Party.chara[a]._stat = 'P'
-				C_09D9(a)
-				dspl_Stats()
-			}
-		case TIL_47:
-			if isCharaConscious(a) {
-				Party.chara[a]._stat = 'S'
-				Fighters._chtile[a] = TIL_38
-				C_09D9(a)
-				dspl_Stats()
-			}
-		case TIL_46, TIL_4C:
-			C_09D9(a)
-			hitChara(a, U4_RND3(32)+16)
-		}
-		return
-	}
-	if CurMode == MOD_DUNGEON {
-		if tile_cur&0xf0 == 0xa0 {
-			switch tile_cur & 3 {
-			case 0:
-				C_91D1()
-			case 2:
-				C_1584()
-			case 3:
-				C_919A()
-			}
-		} else if tile_cur&0xf0 == 0x80 {
-			if tile_cur == 0x80 {
-				u4_puts("\nWinds!\n")
-				Party.f_1dc = 0
-			} else {
-				if tile_cur < 0x88 {
-					u4_puts("\nFalling Rocks!\n")
-				} else {
-					u4_puts("\nPit!\n")
-				}
-				C_1584()
-			}
-		}
-		return
-	}
-	switch tile_cur {
-	case TIL_03, TIL_44:
-		C_91D1()
-	case TIL_46, TIL_4C:
-		C_1584()
-	case TIL_47:
-		C_919A()
-	}
-}
-
-// ---- U4_MIX.C ----
-
+// The odds (one in so many) of the ground's random harms.
 const (
-	RG_ash        = 0x80 >> 0
-	RG_ginseng    = 0x80 >> 1
-	RG_garlic     = 0x80 >> 2
-	RG_spiderSilk = 0x80 >> 3
-	RG_bloodMoss  = 0x80 >> 4
-	RG_blackPearl = 0x80 >> 5
-	RG_nightshade = 0x80 >> 6
-	RG_mandrake   = 0x80 >> 7
+	trollOdds        = 8 // bridge trolls on a bridge
+	fallAsleepOdds   = 4 // a member falls asleep in a sleep field
+	getPoisonedOdds  = 8 // a member is poisoned in a swamp or poison field
+	burnDamageBase   = 16
+	burnDamageSpread = 32
 )
 
-var D_277E = [26]uint8{
-	/*A*/ RG_ginseng | RG_garlic,
-	/*B*/ RG_spiderSilk | RG_bloodMoss,
-	/*C*/ RG_ginseng | RG_garlic,
-	/*D*/ RG_ash | RG_garlic | RG_blackPearl,
-	/*E*/ RG_ash | RG_spiderSilk | RG_blackPearl,
-	/*F*/ RG_ash | RG_blackPearl,
-	/*G*/ RG_ash | RG_blackPearl | RG_mandrake,
-	/*H*/ RG_ginseng | RG_spiderSilk,
-	/*I*/ RG_blackPearl | RG_mandrake,
-	/*J*/ RG_blackPearl | RG_nightshade | RG_mandrake,
-	/*K*/ RG_blackPearl | RG_nightshade,
-	/*L*/ RG_ash,
-	/*M*/ RG_ash | RG_blackPearl,
-	/*N*/ RG_ash | RG_garlic | RG_mandrake,
-	/*O*/ RG_ash | RG_bloodMoss,
-	/*P*/ RG_ash | RG_ginseng | RG_garlic,
-	/*Q*/ RG_ash | RG_ginseng | RG_bloodMoss,
-	/*R*/ RG_ash | RG_ginseng | RG_garlic | RG_spiderSilk | RG_bloodMoss | RG_mandrake,
-	/*S*/ RG_ginseng | RG_spiderSilk,
-	/*T*/ RG_ash | RG_bloodMoss | RG_mandrake,
-	/*U*/ RG_ash | RG_garlic,
-	/*V*/ RG_nightshade | RG_mandrake,
-	/*W*/ RG_ash | RG_bloodMoss,
-	/*X*/ RG_ash | RG_spiderSilk | RG_bloodMoss,
-	/*Y*/ RG_spiderSilk | RG_bloodMoss,
-	/*Z*/ RG_spiderSilk | RG_bloodMoss,
+// The fields of the dungeon (the detail of a dngField room).
+const (
+	fieldPoison = iota
+	fieldEnergy
+	fieldFire
+	fieldSleep
+)
+
+// The traps of the dungeon (the detail of a dngTrap room): winds, falling rocks (details
+// 1 to 7), and pits (8 on).
+const (
+	trapWinds = 0
+	trapPit   = 8
+)
+
+// sleepField may put each conscious member to sleep.
+func sleepField() {
+	for m := int(party.size) - 1; m >= 0; m-- {
+		if isConscious(m) && randomBits(fallAsleepOdds-1) == 0 {
+			party.members[m].status = statusAsleep
+			flashMember(m)
+			showStats()
+		}
+	}
 }
 
-func CMD_Mix() { /*C_8C08*/
-	var loc_A [8]uint16
-	loc_D := 0
-	for loc_D == 0 {
-		Gra_13()
-		C_4649()
-		C_4C42(0)
-		txt_Y = 23
-		txt_X = 24
-		u4_puts("Mix Reagents\n")
-		loc_C := AskLetter("For Spell:\x12\x12\b", 'A', 'Z')
-		if loc_C < 0 {
+// poisonField may poison each healthy member.
+func poisonField() {
+	for m := int(party.size) - 1; m >= 0; m-- {
+		if party.members[m].status == statusGood && randomBits(getPoisonedOdds-1) == 0 {
+			party.members[m].status = statusPoisoned
+			flashMember(m)
+			showStats()
+		}
+	}
+}
+
+// groundEvent: the ground the party (or the active member in combat) stands on harms it.
+func groundEvent() {
+	if gameMode == modeOutdoors && hereTile == tileBridge && randomBits(trollOdds-1) == 0 {
+		printText("\nBridge Trolls!\n")
+		encounterTile = tileTroll
+		foeX = party.x
+		foeY = party.y
+		foeGround = tileBridge
+		beginCombat()
+		return
+	}
+	if gameMode <= modeTown && party.flyingOrLight != 0 {
+		return // the balloon floats above it
+	}
+	if gameMode >= modeCombat {
+		groundStrikesMember(int(activeMember))
+		return
+	}
+	if gameMode == modeDungeon {
+		dungeonRoomEvent()
+		return
+	}
+	switch hereTile {
+	case tileSwamp, tilePoisonField:
+		poisonField()
+	case tileFireField, tileLava:
+		damageParty()
+	case tileSleepField:
+		sleepField()
+	}
+}
+
+// groundStrikesMember: the battlefield's ground under the member harms them.
+func groundStrikesMember(m int) {
+	if fighters.memberTile[m] == 0 {
+		return
+	}
+	switch *combatTile(int(battlefield.memberY[m]), int(battlefield.memberX[m])) {
+	case tileSwamp, tilePoisonField:
+		if party.members[m].status == statusGood {
+			party.members[m].status = statusPoisoned
+			flashMember(m)
+			showStats()
+		}
+	case tileSleepField:
+		if isConscious(m) {
+			party.members[m].status = statusAsleep
+			fighters.memberTile[m] = tileAsleep
+			flashMember(m)
+			showStats()
+		}
+	case tileFireField, tileLava:
+		flashMember(m)
+		damageMember(m, randomBelow(burnDamageSpread)+burnDamageBase)
+	}
+}
+
+// dungeonRoomEvent: the field or trap the party stands on in a dungeon.
+func dungeonRoomEvent() {
+	switch dngKind(hereTile) {
+	case dngField:
+		switch dngDetail(hereTile) & 3 {
+		case fieldPoison:
+			poisonField()
+		case fieldFire:
+			damageParty()
+		case fieldSleep:
+			sleepField()
+		}
+	case dngTrap:
+		switch detail := dngDetail(hereTile); {
+		case detail == trapWinds:
+			printText("\nWinds!\n")
+			party.flyingOrLight = 0 // they blow out the torch
+		case detail < trapPit:
+			printText("\nFalling Rocks!\n")
+			damageParty()
+		default:
+			printText("\nPit!\n")
+			damageParty()
+		}
+	}
+}
+
+// ---- Mix ----
+
+// The reagents, as the bits of a recipe.
+const (
+	usesAsh = 128 >> iota
+	usesGinseng
+	usesGarlic
+	usesSpiderSilk
+	usesBloodMoss
+	usesBlackPearl
+	usesNightshade
+	usesMandrake
+)
+
+// reagentBit is reagent r's bit in a recipe.
+func reagentBit(r int) uint8 { return 128 >> r }
+
+// recipes are the reagents that each spell, A to Z, is mixed from.
+var recipes = [26]uint8{
+	/*Awaken*/ usesGinseng | usesGarlic,
+	/*Blink*/ usesSpiderSilk | usesBloodMoss,
+	/*Cure*/ usesGinseng | usesGarlic,
+	/*Dispel*/ usesAsh | usesGarlic | usesBlackPearl,
+	/*Energy*/ usesAsh | usesSpiderSilk | usesBlackPearl,
+	/*Fireball*/ usesAsh | usesBlackPearl,
+	/*Gate*/ usesAsh | usesBlackPearl | usesMandrake,
+	/*Heal*/ usesGinseng | usesSpiderSilk,
+	/*Iceball*/ usesBlackPearl | usesMandrake,
+	/*Jinx*/ usesBlackPearl | usesNightshade | usesMandrake,
+	/*Kill*/ usesBlackPearl | usesNightshade,
+	/*Light*/ usesAsh,
+	/*Magic missile*/ usesAsh | usesBlackPearl,
+	/*Negate*/ usesAsh | usesGarlic | usesMandrake,
+	/*Open*/ usesAsh | usesBloodMoss,
+	/*Protection*/ usesAsh | usesGinseng | usesGarlic,
+	/*Quickness*/ usesAsh | usesGinseng | usesBloodMoss,
+	/*Resurrect*/ usesAsh | usesGinseng | usesGarlic | usesSpiderSilk | usesBloodMoss | usesMandrake,
+	/*Sleep*/ usesGinseng | usesSpiderSilk,
+	/*Tremor*/ usesAsh | usesBloodMoss | usesMandrake,
+	/*Undead*/ usesAsh | usesGarlic,
+	/*View*/ usesNightshade | usesMandrake,
+	/*Winds*/ usesAsh | usesBloodMoss,
+	/*X-it*/ usesAsh | usesSpiderSilk | usesBloodMoss,
+	/*Y-up*/ usesSpiderSilk | usesBloodMoss,
+	/*Z-down*/ usesSpiderSilk | usesBloodMoss,
+}
+
+// maxMixtures is the most of one spell the party can carry.
+const maxMixtures = 99
+
+// The prompts' place at the bottom of the status area.
+const (
+	promptRow = 23
+	promptCol = 24
+)
+
+func cmdMix() {
+	for done := false; !done; {
+		clearStatus()
+		clearStatusTitle()
+		showMixtures()
+		textRow, textCol = promptRow, promptCol
+		printText("Mix Reagents\n")
+		spell := askLetter("For Spell:"+answerRoom(2), 'A', 'Z')
+		if spell < 0 {
 			break
 		}
-		loc_C -= 'A'
-		u4_puts(D_1E98[101+loc_C])
-		Gra_CR()
-		Gra_13()
-		C_4649()
-		for si := 7; si >= 0; si-- {
-			loc_A[si] = Party._reagents[si] & 0xff // kept in a byte
+		spell -= 'A'
+		printText(spellNames[spell])
+		newLine()
+		clearStatus()
+		clearStatusTitle()
+		var before [8]uint16
+		for r := range before {
+			before[r] = uint16(uint8(party.reagents[r])) // the original kept only the low byte
 		}
-		loc_E := uint8(0) // char; the compiler compares it as a byte
+		mixed := uint8(0)
 		for {
-			C_4BC7(0)
-			txt_Y = 23
-			txt_X = 24
-			loc_B := AskLetter("Reagent:\x12\x12\b", 'A', 'H')
-			if loc_B == -2 {
-				Party._reagents = loc_A
-				loc_D = 1
+			showReagents()
+			textRow, textCol = promptRow, promptCol
+			reagent := askLetter("Reagent:"+answerRoom(2), 'A', 'H')
+			if reagent == -2 { // cancelled: the reagents go back
+				party.reagents = before
+				done = true
 				break
 			}
-			if loc_B == -1 {
-				if loc_E == 0 {
-					u4_puts("\nNothing mixed!\n")
+			if reagent == -1 { // mixed
+				if mixed == 0 {
+					printText("\nNothing mixed!\n")
 				} else {
-					u4_puts("\nYou mix the Reagents, and...\n")
-					if D_277E[loc_C] == loc_E {
-						u4_puts("Success!\n\n")
-						Party._mixtures[loc_C]++
-						if Party._mixtures[loc_C] > 99 {
-							Party._mixtures[loc_C] = 99
-						}
+					printText("\nYou mix the Reagents, and...\n")
+					if recipes[spell] == mixed {
+						printText("Success!\n\n")
+						party.mixtures[spell] = min(party.mixtures[spell]+1, maxMixtures)
 					} else {
-						u4_puts("It Fizzles!\n\n")
+						printText("It Fizzles!\n\n")
 					}
 				}
 				break
 			}
-			loc_B -= 'A'
-			if Party._reagents[loc_B] == 0 {
-				w_NoneLeft()
+			reagent -= 'A'
+			if party.reagents[reagent] == 0 {
+				sayNoneLeft()
 				break
 			}
-			loc_E |= 0x80 >> loc_B
-			Party._reagents[loc_B]--
+			mixed |= reagentBit(reagent)
+			party.reagents[reagent]--
 		}
 	}
-	Gra_13()
-	C_4649()
-	dspl_Stats()
+	clearStatus()
+	clearStatusTitle()
+	showStats()
 }
 
-// ---- U4_LOCAT.C ----
+// ---- Locate ----
 
-func CMD_Locate() { /*C_755E*/
-	u4_puts("Locate position with ")
-	if Party._sextants == 0 {
-		w_What()
+// cmdLocate reads the sextant: each coordinate as two letters, its sixteenths and its
+// sixteenths' sixteenths.
+func cmdLocate() {
+	printText("Locate position with ")
+	if party.sextants == 0 {
+		sayWhat()
 		return
 	}
-	u4_puts("sextant\n Latitude: ")
-	u4_putc(int(Party._y>>4) + 'A')
-	u4_putc('\'')
-	u4_putc(int(Party._y&0xf) + 'A')
-	u4_puts("\"\nLongitude: ")
-	u4_putc(int(Party._x>>4) + 'A')
-	u4_putc('\'')
-	u4_putc(int(Party._x&0xf) + 'A')
-	u4_putc('"')
-	Gra_CR()
+	printText("sextant\n Latitude: ")
+	printCoordinate(party.y)
+	printText("\"\nLongitude: ")
+	printCoordinate(party.x)
+	printChar('"')
+	newLine()
 }
 
-var D_2334 = [24]uint8{
-	// weapons class masks
-	0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x6F, 0x6F, 0x7E, 0x7E, 0xFF, 0x2C, 0x0C, 0x2E, 0x5E, 0xD0, 0xFF,
-	// D_2344: armor class masks
-	0xFF, 0xFF, 0x7F, 0x2C, 0x2C, 0x24, 0x04, 0xFF,
+// printCoordinate prints a world coordinate as degrees and minutes, A'A to P'P.
+func printCoordinate(c uint8) {
+	printChar(int(c/16) + 'A')
+	printChar('\'')
+	printChar(int(c%16) + 'A')
 }
 
-// "may not use"
-func C_75DC(bp08, bp06, bp04 int) {
-	u4_puts("\nA ")
-	u4_puts(D_1E98[77+int(Party.chara[bp08]._class)])
-	u4_puts(" may NOT use ")
-	if bp04 != 0 {
-		u4_putc('a')
+// ---- Ready and wear ----
+
+// classBit is a class's bit in a mask of classes.
+func classBit(class int) uint8 { return 128 >> class }
+
+const allClasses = 255
+
+// onlyClasses is the mask of the classes given.
+func onlyClasses(classes ...int) uint8 {
+	mask := uint8(0)
+	for _, c := range classes {
+		mask |= classBit(c)
 	}
-	Gra_CR()
-	u4_puts(D_1E98[37+bp06])
-	Gra_CR()
-	sound(1)
+	return mask
 }
 
-func CMD_Ready() { /*C_7631*/
-	var loc_A int
-	if CurMode >= MOD_COMBAT {
-		u4_puts("Ready Weapon!\n")
-		loc_A = int(activeChara)
+// allClassesBut is the mask of every class but the ones given.
+func allClassesBut(classes ...int) uint8 { return ^onlyClasses(classes...) }
+
+// weaponClasses are the classes that may ready each weapon.
+var weaponClasses = [16]uint8{
+	weaponHands:       allClasses,
+	weaponStaff:       allClasses,
+	weaponDagger:      allClasses,
+	weaponSling:       allClasses,
+	weaponMace:        allClassesBut(classMage),
+	weaponAxe:         allClassesBut(classMage, classDruid),
+	weaponSword:       allClassesBut(classMage, classDruid),
+	weaponBow:         allClassesBut(classMage, classShepherd),
+	weaponCrossbow:    allClassesBut(classMage, classShepherd),
+	weaponOil:         allClasses,
+	weaponHalberd:     onlyClasses(classFighter, classTinker, classPaladin),
+	weaponMagicAxe:    onlyClasses(classTinker, classPaladin),
+	weaponMagicSword:  allClassesBut(classMage, classBard, classDruid, classShepherd),
+	weaponMagicBow:    allClassesBut(classMage, classFighter, classShepherd),
+	weaponMagicWand:   onlyClasses(classMage, classBard, classDruid),
+	weaponMysticSword: allClasses,
+}
+
+// armorClasses are the classes that may wear each armour.
+var armorClasses = [8]uint8{
+	armorSkin:       allClasses,
+	armorCloth:      allClasses,
+	armorLeather:    allClassesBut(classMage),
+	armorChainMail:  onlyClasses(classFighter, classTinker, classPaladin),
+	armorPlateMail:  onlyClasses(classFighter, classTinker, classPaladin),
+	armorMagicChain: onlyClasses(classFighter, classPaladin),
+	armorMagicPlate: onlyClasses(classPaladin),
+	armorMysticRobe: allClasses,
+}
+
+// mayUse says whether the member's class may use an item allowed to the classes given.
+func mayUse(member int, classes uint8) bool {
+	return classBit(int(party.members[member].class))&classes != 0
+}
+
+// sayMayNotUse tells that the member's class may not use the item (a weapon is "a ...").
+func sayMayNotUse(member int, item string, isWeapon bool) {
+	printText("\nA ")
+	printText(peopleNames[int(party.members[member].class)])
+	printText(" may NOT use ")
+	if isWeapon {
+		printChar('a')
+	}
+	newLine()
+	printText(item)
+	newLine()
+	sound(soundBeep)
+}
+
+// maxCarried is the most of one weapon or armour the party can carry.
+const maxCarried = 99
+
+// putBack returns an item to the party's stock (hands and skin are not stocked).
+func putBack(stock []uint16, item uint16) {
+	if item != 0 {
+		stock[item] = min(stock[item]+1, maxCarried)
+	}
+}
+
+// afterChoosing restores the status area after a list was shown for a choice.
+func afterChoosing() {
+	clearStatus()
+	clearStatusTitle()
+	showStats()
+	if gameMode >= modeCombat {
+		invertStatusLine(int(activeMember))
+	}
+}
+
+func cmdReady() {
+	var member int
+	if gameMode >= modeCombat {
+		printText("Ready Weapon!\n")
+		member = int(activeMember)
 	} else {
-		u4_puts("Ready a weapon\n")
-		if loc_A = AskChara("for:\x12\x12\b"); loc_A < 0 {
+		printText("Ready a weapon\n")
+		if member = askMember("for:" + answerRoom(2)); member < 0 {
 			return
 		}
 	}
-	Gra_13()
-	C_4832(0)
-	txt_Y = 23
-	txt_X = 24
-	loc_B := AskLetter("Weapon:\x12\x12\b", 'A', 'P')
-	Gra_13()
-	C_4649()
-	dspl_Stats()
-	if CurMode >= MOD_COMBAT {
-		Gra_11(int(activeChara))
-	}
-	if loc_B < 0 {
+	clearStatus()
+	showWeapons()
+	textRow, textCol = promptRow, promptCol
+	weapon := askLetter("Weapon:"+answerRoom(2), 'A', 'P')
+	afterChoosing()
+	if weapon < 0 {
 		return
 	}
-	loc_B -= 'A'
-	if loc_B != 0 && Party._weapons[loc_B] == 0 {
-		w_NoneLeft()
-		return
-	}
-	if loc_B != 0 {
-		if (0x80>>Party.chara[loc_A]._class)&D_2334[loc_B] == 0 {
-			C_75DC(loc_A, loc_B, 1)
+	weapon -= 'A'
+	if weapon != weaponHands {
+		if party.weapons[weapon] == 0 {
+			sayNoneLeft()
+			return
+		}
+		if !mayUse(member, weaponClasses[weapon]) {
+			sayMayNotUse(member, weaponNames[weapon], true)
 			return
 		}
 	}
-	if loc_C := Party.chara[loc_A]._weapon; loc_C != 0 {
-		Party._weapons[loc_C]++
-		if Party._weapons[loc_C] > 99 {
-			Party._weapons[loc_C] = 99
-		}
+	putBack(party.weapons[:], party.members[member].weapon)
+	if weapon != weaponHands {
+		party.weapons[weapon]--
 	}
-	if loc_B != 0 {
-		Party._weapons[loc_B]--
-	}
-	Party.chara[loc_A]._weapon = uint16(loc_B)
-	u4_puts(D_1E98[37+loc_B])
-	Gra_CR()
+	party.members[member].weapon = uint16(weapon)
+	printText(weaponNames[weapon])
+	newLine()
 }
 
-func CMD_Wear() { /*C_7732*/
-	u4_puts("Wear Armour\n")
-	loc_A := AskChara("for:\x12\x12\b")
-	if loc_A < 0 {
+func cmdWear() {
+	printText("Wear Armour\n")
+	member := askMember("for:" + answerRoom(2))
+	if member < 0 {
 		return
 	}
-	Gra_13()
-	C_48F8(0)
-	txt_Y = 23
-	txt_X = 24
-	loc_B := AskLetter("Armour:\x12\x12\b", 'A', 'H')
-	Gra_13()
-	C_4649()
-	dspl_Stats()
-	if CurMode >= MOD_COMBAT {
-		Gra_11(int(activeChara))
-	}
-	if loc_B < 0 {
+	clearStatus()
+	showArmour()
+	textRow, textCol = promptRow, promptCol
+	armor := askLetter("Armour:"+answerRoom(2), 'A', 'H')
+	afterChoosing()
+	if armor < 0 {
 		return
 	}
-	loc_B -= 'A'
-	if loc_B != 0 && Party._armors[loc_B] == 0 {
-		w_NoneLeft()
-		return
-	}
-	if loc_B != 0 {
-		if (0x80>>Party.chara[loc_A]._class)&D_2334[loc_B+0x10] == 0 {
-			C_75DC(loc_A, loc_B+0x10, 0)
+	armor -= 'A'
+	if armor != armorSkin {
+		if party.armors[armor] == 0 {
+			sayNoneLeft()
+			return
+		}
+		if !mayUse(member, armorClasses[armor]) {
+			sayMayNotUse(member, armorNames[armor], false)
 			return
 		}
 	}
-	if loc_C := Party.chara[loc_A]._armor; loc_C != 0 {
-		Party._armors[loc_C]++
-		if Party._armors[loc_C] > 99 {
-			Party._armors[loc_C] = 99
-		}
+	putBack(party.armors[:], party.members[member].armor)
+	if armor != armorSkin {
+		party.armors[armor]--
 	}
-	if loc_B != 0 {
-		Party._armors[loc_B]--
-	}
-	Party.chara[loc_A]._armor = uint16(loc_B)
-	u4_puts(D_1E98[53+loc_B])
-	Gra_CR()
+	party.members[member].armor = uint16(armor)
+	printText(armorNames[armor])
+	newLine()
 }
