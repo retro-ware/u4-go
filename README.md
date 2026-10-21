@@ -13,7 +13,7 @@ release); the port reads its files at runtime. Nothing is ever written to the ga
 Needs Go 1.26 or newer.
 
     go build -o u4 ./cmd/u4
-    ./u4 -import /path/to/your/game     # once: copies the game files into ./game
+    ./u4 -import /path/to/your/game     # once: copies the game files into ./data
     ./u4                                # play
 
 `-import SRC` takes a plain folder, a zip, a CD image (ISO/BIN/CUE), a GOG installer
@@ -23,15 +23,17 @@ Flags:
 
 | Flag | Meaning |
 |------|---------|
-| `-data DIR` | game files directory (default `$GOPLAY_DATA`, else `game`) |
-| `-save DIR` | saved games directory (default: the game directory) |
+| `-data DIR` | game files directory (default `data`) |
+| `-save DIR` | saved games directory (default `save`) |
 | `-import SRC` | import the game from SRC into `-data`, then exit |
 | `-scale N` | window scale (default 3) |
 | `-ega` | start with the original EGA graphics instead of the VGA upgrade |
 | `-nomusic` | no MIDI music |
 
-Music is synthesised from an embedded SoundFont, which is not in git. Run
-`tools/fetch-soundfont.sh` before building to include it.
+The layout is goplay's: run from the binary's directory, it needs no flags. Music is
+synthesised from the GeneralUser GS SoundFont at `../../system/sf2/GeneralUser-GS.sf2`
+(`tools/fetch-soundfont.sh` fetches it for the tests), and the music and effect volumes come
+from goplay's `../../settings.toml`.
 
 ## Controls
 
@@ -58,6 +60,7 @@ entries only queue the original keys.
 - `internal/title`: TITLE.EXE port
 - `internal/host`, `internal/ega`, `internal/speaker`, `internal/music`: display, input and sound
 - `internal/gamefs`, `internal/gameimport`: game file lookup and `-import`
+- `internal/goplay`: the goplay launcher's settings and shared system folder
 
 ## Status
 

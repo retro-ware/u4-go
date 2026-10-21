@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fetches the GeneralUser GS SoundFont (S. Christian Collins, v2.0.3, free to use and
 # redistribute, see internal/music/sf2/LICENSE-GeneralUser-GS.txt) into internal/music/sf2,
-# where desktop builds embed it. It is ~32 MB, so it stays out of git.
+# for the music tests (the game reads goplay's system/sf2 copy). It is ~32 MB, so it stays out of git.
 set -e
 dir=$(cd "$(dirname "$0")/.." && pwd)/internal/music/sf2
 rev=684543d5e5efaef08d02be50dcda8d552478fa60 # github.com/mrbumpy409/GeneralUser-GS, v2.0.3

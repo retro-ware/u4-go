@@ -1,10 +1,14 @@
 // Command u4 runs Ultima IV (the DOS EGA version) from the original data files: ULTIMA.COM's
 // job, TITLE.EXE then AVATAR.EXE, each ported to Go.
 //
-//	u4 [-data DIR]            play with the game files in DIR (default $GOPLAY_DATA, else ./game)
+//	u4                        play with the game files in ./data, saving to ./save (goplay's
+//	                          layout: run from the binary's directory; -data and -save override)
 //	                          (VGA upgrade graphics; -ega for the original EGA, F2 switches)
-//	u4 -import SRC -data DIR  copy the game files out of SRC (folder, zip, ISO/BIN/CUE, GOG
+//	u4 -import SRC [-data DIR] copy the game files out of SRC (folder, zip, ISO/BIN/CUE, GOG
 //	                          installer, loose files) into DIR, write DIR/COVER.PNG and exit
+//
+// Music needs the GeneralUser GS SoundFont at ../../system/sf2/GeneralUser-GS.sf2. Volume
+// is the game's own: Alt-+/Alt-- and Alt-V for the music, the Volume command for the effects.
 package main
 
 import (
@@ -19,12 +23,12 @@ import (
 	"strings"
 
 	"github.com/memmaker/u4-go/internal/ega"
-	"github.com/memmaker/u4-go/internal/gameimport"
 	"github.com/memmaker/u4-go/internal/host"
 	"github.com/memmaker/u4-go/internal/music"
 	"github.com/memmaker/u4-go/internal/speaker"
 	"github.com/memmaker/u4-go/internal/title"
 	"github.com/memmaker/u4-go/internal/u4"
+	"github.com/retro-ware/gameimport"
 )
 
 // gameFile says whether name is one of the game's data files.
@@ -45,12 +49,8 @@ func gameFile(name string) bool {
 }
 
 func main() {
-	def := os.Getenv("GOPLAY_DATA")
-	if def == "" {
-		def = "game"
-	}
-	game := flag.String("data", def, "directory with the original game files")
-	save := flag.String("save", "", "directory for saved games (default: the game directory)")
+	game := flag.String("data", "data", "directory with the original game files")
+	save := flag.String("save", "save", "directory for saved games")
 	imp := flag.String("import", "", "import the game files from this folder/zip/ISO/installer into -data and exit")
 	scale := flag.Int("scale", 3, "window scale")
 	egaMode := flag.Bool("ega", false, "start with the original EGA graphics instead of the VGA upgrade (F2 toggles)")
@@ -79,9 +79,7 @@ func main() {
 		}
 		return
 	}
-	if *save == "" {
-		*save = *game
-	}
+
 	if _, err := os.Stat(filepath.Join(*game, "WORLD.MAP")); err != nil {
 		fmt.Fprintf(os.Stderr, "no game files in %s; use -import SRC or -data DIR\n", *game)
 		os.Exit(1)

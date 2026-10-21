@@ -1,11 +1,8 @@
 // Package music plays the MIDI soundtrack of the "Ultima 4 VGA upgrade patch" v1.3 (Aridindae
 // Dragon, freeware): its LARGE.XMI, nine General MIDI songs, synthesized with meltysynth from a
-// SoundFont (GeneralUser GS, embedded in desktop builds when tools/fetch-soundfont.sh fetched
-// it; on js/wasm read from the file $GOPLAY_SF2 names) into one Ebiten audio stream, mixed by
-// Ebiten with the PC speaker effects.
+// SoundFont (GeneralUser GS, from goplay's system/sf2 folder) into one Ebiten audio stream,
+// mixed by Ebiten with the PC speaker effects.
 package music
-
-//go:generate sh ../../tools/fetch-soundfont.sh
 
 import (
 	"bytes"
@@ -17,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/memmaker/u4-go/internal/goplay"
 	"github.com/memmaker/u4-go/internal/meltysynth"
 )
 
@@ -111,13 +109,8 @@ func Start() {
 		return
 	}
 	started = true
-	sf2 := embeddedSF2()
-	if p := os.Getenv("GOPLAY_SF2"); p != "" {
-		if b, err := os.ReadFile(p); err == nil {
-			sf2 = b
-		}
-	}
-	if sf2 == nil {
+	sf2, err := os.ReadFile(goplay.System("sf2/GeneralUser-GS.sf2"))
+	if err != nil {
 		return
 	}
 	go func() {
@@ -183,7 +176,7 @@ func (stream) Read(b []byte) (int, error) {
 		playing = song
 	}
 	player.render(l, r)
-	g := float32(volume) / 10 * float32(fader("music")) // and the goplay desk's
+	g := float32(volume) / 10
 	if muted {
 		g = 0
 	}

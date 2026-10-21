@@ -36,8 +36,8 @@ func TestParseXMI(t *testing.T) {
 // TestRender plays each song once through the SoundFont and checks it is audible and does not
 // clip. $MUSIC_WAV_DIR gets a WAV of each.
 func TestRender(t *testing.T) {
-	sf2 := embeddedSF2()
-	if sf2 == nil {
+	sf2, err := os.ReadFile("sf2/GeneralUser-GS.sf2")
+	if err != nil {
 		t.Skip("no SoundFont: run tools/fetch-soundfont.sh")
 	}
 	ss, _ := parseXMI(largeXMI)

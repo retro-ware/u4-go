@@ -107,7 +107,6 @@ func (stream) Read(b []byte) (int, error) {
 	frames := len(b) / 4
 	mu.Lock()
 	defer mu.Unlock()
-	g := volume("sfx") // the speaker plays the effects
 	for f := 0; f < frames; f++ {
 		v := int16(0)
 		if len(pcm) > 0 {
@@ -117,7 +116,6 @@ func (stream) Read(b []byte) (int, error) {
 			lp *= 0.99 // relax to the middle when silent
 			v = int16(lp)
 		}
-		v = int16(float64(v) * g)
 		binary.LittleEndian.PutUint16(b[f*4:], uint16(v))
 		binary.LittleEndian.PutUint16(b[f*4+2:], uint16(v))
 	}
