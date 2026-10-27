@@ -107,6 +107,7 @@ func Run(title string, scale int, gameMain func()) error {
 	theGame = g
 	g.img = ebiten.NewImage(ScreenW, ScreenH)
 	g.rgba = image.NewRGBA(image.Rect(0, 0, ScreenW, ScreenH))
+	ebiten.SetFullscreen(os.Getenv("GOPLAY_FULLSCREEN") == "1") // the goplay launcher asks for fullscreen
 	return ebiten.RunGame(g)
 }
 
